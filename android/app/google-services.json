@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "646990367359",
+    "project_id": "internet-billing-fsd",
+    "storage_bucket": "internet-billing-fsd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:646990367359:android:0882cb847887a07829cd4a",
+        "android_client_info": {
+          "package_name": "com.example.internet_billing"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBHtZSwnbdopmG3HbQoGeYyhFcM4yz7Eoc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
