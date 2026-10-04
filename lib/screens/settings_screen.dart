@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -71,13 +72,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _showBackupDialog() async {
     final p = await SharedPreferences.getInstance();
+    String? uid = FirebaseAuth.instance.currentUser?.uid;
     Map<String, dynamic> allData = {};
-    allData['bills'] = p.getString('bills');
-    allData['collections'] = p.getString('collections');
+    // --- YAHAN FIX KIYA HAI - AB UID KE HISAB SE BACKUP HOGA ---
+    allData['bills'] = p.getString('bills_$uid');
+    allData['collections'] = p.getString('collections_$uid');
+    allData['customers'] = p.getString('users_data_$uid');
     allData['pkg_cost'] = p.getString('pkg_cost');
     allData['biz_name'] = p.getString('biz_name');
     allData['biz_phone'] = p.getString('biz_phone');
-    allData['customers'] = p.getString('customers');
 
     String jsonStr = jsonEncode(allData);
 
@@ -89,7 +92,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 15),
         const Text("Restore karne ke liye neeche backup paste karein:", style: TextStyle(color: Colors.white70, fontSize: 12)),
         const SizedBox(height: 10),
-        TextField(maxLines: 5, style: const TextStyle(color: Colors.white, fontSize: 10), decoration: const InputDecoration(border: OutlineInputBorder(), hintText: "Backup JSON yahan paste karein", hintStyle: TextStyle(color: Colors.white38)), onChanged: (val) async { if(val.length > 100){ try{ Map<String, dynamic> data = jsonDecode(val); final pref = await SharedPreferences.getInstance(); if(data['bills']!=null) await pref.setString('bills', data['bills']); if(data['collections']!=null) await pref.setString('collections', data['collections']); if(data['pkg_cost']!=null) await pref.setString('pkg_cost', data['pkg_cost']); if(data['biz_name']!=null) await pref.setString('biz_name', data['biz_name']); if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Restore Ho Gaya! App restart karein"))); } catch(e){} } }),
+        TextField(maxLines: 5, style: const TextStyle(color: Colors.white, fontSize: 10), decoration: const InputDecoration(border: OutlineInputBorder(), hintText: "Backup JSON yahan paste karein", hintStyle: TextStyle(color: Colors.white38)), onChanged: (val) async { if(val.length > 100){ try{ Map<String, dynamic> data = jsonDecode(val); final pref = await SharedPreferences.getInstance(); if(data['bills']!=null) await pref.setString('bills_$uid', data['bills']); if(data['collections']!=null) await pref.setString('collections_$uid', data['collections']); if(data['customers']!=null) await pref.setString('users_data_$uid', data['customers']); if(data['pkg_cost']!=null) await pref.setString('pkg_cost', data['pkg_cost']); if(data['biz_name']!=null) await pref.setString('biz_name', data['biz_name']); if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Restore Ho Gaya! App restart karein"))); } catch(e){} } }),
       ])),
       actions: [TextButton(onPressed: ()=> Navigator.pop(ctx), child: const Text("Close"))],
     ));
@@ -162,7 +165,7 @@ class _BusinessInfoDialogState extends State<BusinessInfoDialog> {
   }
 }
 
-// --- Package Cost Dialog - FIXED (pkg_cost se connect) ---
+// --- Package Cost Dialog ---
 class PackageCostDialog extends StatefulWidget {
   const PackageCostDialog({super.key});
   @override
@@ -230,7 +233,6 @@ class _PackageCostDialogState extends State<PackageCostDialog> {
               toSave[e.key] = double.tryParse(e.value.text)?? defaultCost[e.key]!;
             }
             await p.setString('pkg_cost', jsonEncode(toSave));
-            // purani keys bhi save kar dete hain compatibility ke liye
             for(var e in toSave.entries){
               await p.setString('cost_${e.key}', e.value.toString());
             }
