@@ -6,7 +6,8 @@ import 'dart:convert';
 class ReportsScreen extends StatefulWidget {
   final List<dynamic> bills;
   final List<dynamic> collections;
-  const ReportsScreen({super.key, required this.bills, required this.collections});
+  final List<dynamic> users; // POINT 5 ke liye add
+  const ReportsScreen({super.key, required this.bills, required this.collections, required this.users});
   @override
   State<ReportsScreen> createState() => _ReportsScreenState();
 }
@@ -15,6 +16,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Map<String, double> costPrice = {
     "10 MB": 680, "20 MB": 950, "30 MB": 1350, "50 MB": 1800,
     "10 Mbps": 680, "20 Mbps": 950, "30 Mbps": 1350, "50 Mbps": 1800,
+    "5 Mbps": 500,
   };
   late AnimationController _controller;
 
@@ -57,16 +59,31 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     if(val is num) return val.toDouble();
     return double.tryParse(val.toString())?? 0;
   }
+  bool isUserExpired(Map<String, dynamic> user){
+    if(user['expiryDate']==null) return false;
+    try{ return DateTime.now().isAfter(DateTime.fromMillisecondsSinceEpoch(user['expiryDate'])); }catch(e){ return false; }
+  }
+
   @override
   Widget build(BuildContext context) {
     double paidSale = 0;
     for (var b in widget.collections) { paidSale += getAmount(b['amount']); }
+
+    // POINT 5: Total Sale sirf active users ke package rate se
+    double totalSaleActive = 0;
+    for(var u in widget.users){
+      if(!isUserExpired(Map<String,dynamic>.from(u))){
+        totalSaleActive += getAmount(u['amount']);
+      }
+    }
+
     double pendingSale = 0;
     for (var b in widget.bills) { if (b['isPaid']!= true) pendingSale += getAmount(b['amount']); }
-    double totalSale = paidSale + pendingSale;
+
     double totalCost = 0;
     Set<String> alreadyCosted = {};
     for (var b in widget.collections) {
+      if(b['type'] == 'due_collection') continue; // POINT 2: Due ka kharcha dubara nahi
       String pkg = b['package']?.toString()?? "10 MB";
       String billMonth = b['billMonth']?.toString()?? "";
       String phone = b['phone']?.toString()?? "";
@@ -76,16 +93,16 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
         totalCost += costPrice[pkg]?? costPrice[ pkg.replaceAll(' MB',' Mbps') ]?? 680;
       }
     }
-    double totalProfit = paidSale - totalCost;
+    double totalProfit = paidSale - totalCost; // POINT 4
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(backgroundColor: const Color(0xFF121212), title: Text("Monthly Reports", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)), actions: [IconButton(icon: const Icon(Icons.settings, color: Colors.white70), onPressed: showCostEditDialog)]),
       body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
-        _animatedRow(0, [_box("Total Sale", totalSale, Colors.purple, 0), const SizedBox(width: 10), _box("Collected", paidSale, Colors.green, 100)]),
+        _animatedRow(0, [_box("Total Sale (Active)", totalSaleActive, Colors.purple, 0), const SizedBox(width: 10), _box("Collected", paidSale, Colors.green, 100)]),
         const SizedBox(height: 10),
-        _animatedRow(1, [_box("Pending", pendingSale, Colors.orange, 200), const SizedBox(width: 10), _box("Kharcha", totalCost, Colors.redAccent, 300)]),
+        _animatedRow(1, [_box("Pending Bills", pendingSale, Colors.orange, 200), const SizedBox(width: 10), _box("Kharcha", totalCost, Colors.redAccent, 300)]),
         const SizedBox(height: 15),
-        _animatedRow(2, [Expanded(child: ScaleTransition(scale: CurvedAnimation(parent: _controller, curve: Curves.elasticOut), child: Container(width: double.infinity, padding: const EdgeInsets.all(20), decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFF7C4DFF), Color(0xFF4A00E0)]), borderRadius: BorderRadius.circular(20)), child: Column(children: [const Text("Kul Khalis Bachat", style: TextStyle(color: Colors.white70)), const SizedBox(height: 5), TweenAnimationBuilder<double>(tween: Tween(begin: 0, end: totalProfit), duration: const Duration(milliseconds: 2000), curve: Curves.easeOutCubic, builder: (c, v, ch) => Text("Rs. ${v.toStringAsFixed(0)}", style: GoogleFonts.poppins(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold))), Text("${widget.collections.length} collections", style: const TextStyle(color: Colors.white70, fontSize: 11))]))))]),
+        _animatedRow(2, [Expanded(child: ScaleTransition(scale: CurvedAnimation(parent: _controller, curve: Curves.elasticOut), child: Container(width: double.infinity, padding: const EdgeInsets.all(20), decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFF7C4DFF), Color(0xFF4A00E0)]), borderRadius: BorderRadius.circular(20)), child: Column(children: [const Text("Kul Khalis Bachat", style: TextStyle(color: Colors.white70)), const SizedBox(height: 5), TweenAnimationBuilder<double>(tween: Tween(begin: 0, end: totalProfit), duration: const Duration(milliseconds: 2000), curve: Curves.easeOutCubic, builder: (c, v, ch) => Text("Rs. ${v.toStringAsFixed(0)}", style: GoogleFonts.poppins(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold))), Text("${widget.collections.length} collections | $paidSale - $totalCost", style: const TextStyle(color: Colors.white70, fontSize: 11))]))))]),
       ])),
     );
   }

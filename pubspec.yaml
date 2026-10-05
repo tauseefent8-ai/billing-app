@@ -24,7 +24,11 @@ dependencies:
   url_launcher: ^6.2.5
   mailer: ^7.2.0
   image_picker: ^1.2.3
-  path_provider: ^2.1.6
+  path_provider: ^2.1.4
+  excel: ^4.0.6
+  file_picker: ^8.1.2
+  open_file: ^3.3.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'isp_create_account_screen.dart';
 import 'isp_forgot_password_screen.dart';
-import 'customer_login_screen.dart'; // <-- YE CHANGE KIYA HAI
+import 'customer_login_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -27,7 +27,7 @@ class _LoginScreenState extends State<LoginScreen> {
       await FirebaseAuth.instance.signInWithEmailAndPassword(email: emailCtrl.text.trim(), password: passCtrl.text.trim());
     } on FirebaseAuthException catch (e) {
       setState(()=> loading = false);
-      String msg = e.code == 'user-not-found' ? "ID nahi bani" : "Email/Password galat hai";
+      String msg = e.code == 'user-not-found'? "ID nahi bani" : "Email/Password galat hai";
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
     }
   }
@@ -61,8 +61,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 14),
                 Text("Password", style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.black87)),
                 const SizedBox(height: 6),
-                TextField(controller: passCtrl, obscureText: obscure, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "Password", prefixIcon: const Icon(Icons.lock_outline), suffixIcon: IconButton(icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, size: 20), onPressed: ()=> setState(()=> obscure = !obscure)), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
-
+                TextField(controller: passCtrl, obscureText: obscure, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "Password", prefixIcon: const Icon(Icons.lock_outline), suffixIcon: IconButton(icon: Icon(obscure? Icons.visibility_off : Icons.visibility, size: 20), onPressed: ()=> setState(()=> obscure =!obscure)), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
                 const SizedBox(height: 4),
                 Align(
                   alignment: Alignment.centerRight,
@@ -73,13 +72,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Text("Forgot Password?", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontWeight: FontWeight.bold, fontSize: 12)),
                   ),
                 ),
-
                 const SizedBox(height: 10),
-                SizedBox(width: double.infinity, height: 54, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0), onPressed: loading ? null : login, child: loading ? const CircularProgressIndicator(color: Colors.white) : Text("Login", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)))),
+                SizedBox(width: double.infinity, height: 54, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0), onPressed: loading? null : login, child: loading? const CircularProgressIndicator(color: Colors.white) : Text("Login", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)))),
                 const SizedBox(height: 12),
                 SizedBox(width: double.infinity, height: 54, child: OutlinedButton(style: OutlinedButton.styleFrom(side: const BorderSide(color: Color(0xFF7C4DFF), width: 1.5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))), onPressed: (){ Navigator.push(context, MaterialPageRoute(builder: (_) => const IspCreateAccountScreen())); }, child: Text("New ISP? Create Account", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontWeight: FontWeight.bold, fontSize: 14)))),
                 const SizedBox(height: 10),
-                // --- YAHAN FIX KIYA HAI ---
                 SizedBox(width: double.infinity, height: 54, child: OutlinedButton(style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.black26, width: 1), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))), onPressed: (){ Navigator.push(context, MaterialPageRoute(builder: (_) => const CustomerLoginScreen())); }, child: Text("Login as Customer", style: GoogleFonts.poppins(color: Colors.black87, fontWeight: FontWeight.w600, fontSize: 14)))),
               ],
             ),
