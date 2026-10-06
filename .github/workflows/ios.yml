@@ -14,8 +14,35 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          flutter-version: '3.32.0'
+          flutter-version: '3.29.3'
           cache: true
+
+      - name: Fix iOS Files for New Flutter
+        run: |
+          echo "Fixing AppDelegate.swift..."
+          cat > ios/Runner/AppDelegate.swift << 'EOF'
+          import Flutter
+          import UIKit
+          
+          @main
+          @objc class AppDelegate: FlutterAppDelegate {
+            override func application(
+              _ application: UIApplication,
+              didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+            ) -> Bool {
+              GeneratedPluginRegistrant.register(with: self)
+              return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+            }
+          }
+          EOF
+          
+          echo "Removing SceneDelegate if exists..."
+          rm -f ios/Runner/SceneDelegate.swift
+          
+          echo "Cleaning old build..."
+          flutter clean
+          rm -Rf ios/Pods
+          rm -f ios/Podfile.lock
 
       - name: Get packages
         run: flutter pub get
@@ -23,7 +50,7 @@ jobs:
       - name: Build iOS Release
         run: flutter build ios --release --no-codesign --no-tree-shake-icons
 
-      - name: Create IPA
+      - name: Create IPA for Sideloadly
         run: |
           cd build/ios/iphoneos
           mkdir Payload
