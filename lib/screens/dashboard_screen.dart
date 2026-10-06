@@ -20,9 +20,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   @override
   void initState(){
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
-    _fadeAnim = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
-    _slideAnim = Tween<Offset>(begin: const Offset(0, 0.3), end: Offset.zero).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 250)); // POINT 2 FIX - pehle 1200 tha
+    _fadeAnim = CurvedAnimation(parent: _controller, curve: Curves.easeOut); // POINT 2 FIX - pehle easeIn tha
+    _slideAnim = Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut)); // POINT 2 FIX - pehle 0.3 tha
     _controller.forward();
   }
   @override
@@ -101,7 +101,6 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
               _animatedItem(4, Align(alignment: Alignment.centerLeft, child: Text("Recent Collections - ${getMonthYearText(selectedMonth)} (${filteredCollections.length})", style: GoogleFonts.poppins(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)))),
               const SizedBox(height: 10),
               if (filteredCollections.isEmpty && filteredBills.isEmpty) const Padding(padding: EdgeInsets.only(top: 20), child: Text("Is month ka koi data nahi", style: TextStyle(color: Colors.white38))),
-              // POINT 10: Sab users show, scrollable, bill ho ya due sab
               ...filteredCollections.map((e) => _animatedItem(5, Padding(padding: const EdgeInsets.only(bottom: 8), child: ListTile(tileColor: const Color(0xFF1E1E1E), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), title: Text(e['name']?? 'User', style: const TextStyle(color: Colors.white, fontSize: 14)), subtitle: Text("${e['type']?? 'bill'} - ${e['date']!= null? e['date'].toString().split('T')[0] : ""} | ${e['package']?? ''}", style: const TextStyle(color: Colors.white30, fontSize: 10)), trailing: Text("Rs. ${e['amount']}", style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)))))).toList(),
             ]),
           ),
@@ -111,7 +110,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   }
 
   Widget _animatedItem(int index, Widget child){
-    return TweenAnimationBuilder(duration: Duration(milliseconds: 600 + (index * 150)), tween: Tween<double>(begin: 0, end: 1), curve: Curves.easeOutCubic, builder: (context, double val, childWidget){ return Opacity(opacity: val, child: Transform.translate(offset: Offset(0, 30 * (1-val)), child: childWidget)); }, child: child);
+    return TweenAnimationBuilder(duration: Duration(milliseconds: 250 + (index * 50)), tween: Tween<double>(begin: 0, end: 1), curve: Curves.easeOut, builder: (context, double val, childWidget){ return Opacity(opacity: val, child: Transform.translate(offset: Offset(0, 10 * (1-val)), child: childWidget)); }, child: child);
   }
 
   void _showUsersList(BuildContext context, String title, List<dynamic> list) {
@@ -119,7 +118,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   }
 
   Widget _card(String title, double amount, String subtitle, Color color, IconData icon) => Container(width: double.infinity, padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(20), border: Border(left: BorderSide(color: color, width: 5)), boxShadow: [BoxShadow(color: color.withOpacity(0.15), blurRadius: 15, offset: const Offset(0, 5))]), child: Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: color)), const SizedBox(width: 15), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(color: Colors.white54, fontSize: 11)), AnimatedCount(amount: amount), Text(subtitle, style: TextStyle(color: color, fontSize: 11))]), const Spacer(), const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white38)]));
-  Widget _smallCard(String t, String v, IconData ic, int delay) => TweenAnimationBuilder<double>(tween: Tween(begin: 0.8, end: 1), duration: Duration(milliseconds: 500 + delay), curve: Curves.elasticOut, builder: (c, val, child) => Transform.scale(scale: val, child: child), child: Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: const Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(15)), child: Column(children: [Icon(ic, color: Colors.white70), const SizedBox(height: 8), Text(v, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)), Text(t, style: const TextStyle(color: Colors.white54, fontSize: 11))])));
+  Widget _smallCard(String t, String v, IconData ic, int delay) => TweenAnimationBuilder<double>(tween: Tween(begin: 0.8, end: 1), duration: Duration(milliseconds: 250), curve: Curves.easeOut, builder: (c, val, child) => Transform.scale(scale: val, child: child), child: Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: const Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(15)), child: Column(children: [Icon(ic, color: Colors.white70), const SizedBox(height: 8), Text(v, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)), Text(t, style: const TextStyle(color: Colors.white54, fontSize: 11))])));
+
 }
 
 class AnimatedCount extends StatelessWidget {
@@ -127,6 +127,6 @@ class AnimatedCount extends StatelessWidget {
   const AnimatedCount({super.key, required this.amount});
   @override
   Widget build(BuildContext context){
-    return TweenAnimationBuilder<double>(tween: Tween<double>(begin: 0, end: amount), duration: const Duration(milliseconds: 1500), curve: Curves.easeOutCubic, builder: (context, value, child){ return Text("Rs. ${value.toStringAsFixed(0)}", style: GoogleFonts.poppins(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)); });
+    return TweenAnimationBuilder<double>(tween: Tween<double>(begin: 0, end: amount), duration: const Duration(milliseconds: 250), curve: Curves.easeOut, builder: (context, value, child){ return Text("Rs. ${value.toStringAsFixed(0)}", style: GoogleFonts.poppins(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)); });
   }
 }

@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:mailer/mailer.dart';
 import 'package:mailer/smtp_server.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthScreen extends StatefulWidget {
   final bool isCustomer;
@@ -28,20 +29,42 @@ class _AuthScreenState extends State<AuthScreen> {
   final otpCtrl = TextEditingController();
 
   final String companyEmail = "tauseefent8@gmail.com";
-  final String appPassword = "enkwgxaohmygrnil"; // اس کو بعد میں ENV میں ڈالنا
+  final String appPassword = "enkwgxaohmygrnil";
 
   @override
   void initState() {
     super.initState();
     isIspMode = !widget.isCustomer;
     isLoginMode = !widget.isCreateMode;
+    _forceLogoutIfDeleted(); // FIX
+  }
+
+  // FIX 1: Agar ID Firebase se delete hui hai to force logout karo
+  Future<void> _forceLogoutIfDeleted() async {
+    try {
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        // Token reload karega - agar user delete ho chuka to error ayega
+        await user.reload();
+      }
+    } catch (e) {
+      // User delete ho chuka hai, is liye logout
+      await FirebaseAuth.instance.signOut();
+      var prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+    }
+    // Har bar start pe signout taake cache clear ho
+    if (widget.isCreateMode) {
+      await FirebaseAuth.instance.signOut();
+    }
   }
 
   Future<void> sendOtp() async {
     if (!emailCtrl.text.trim().contains("@") || passCtrl.text.trim().length < 6) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sahi Gmail aur 6 harf ka password likho")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sahi Gmail aur 6 harf ka password likho"), backgroundColor: Colors.red));
       return;
     }
+
     setState(() {
       loading = true;
       generatedOtp = (100000 + Random().nextInt(900000)).toString();
@@ -51,32 +74,36 @@ class _AuthScreenState extends State<AuthScreen> {
     final message = Message()
       ..from = Address(companyEmail, 'Tauseef Enterprises')
       ..recipients.add(emailCtrl.text.trim())
-      ..subject = 'OTP Code - $generatedOtp'
-      ..text = 'Aapka OTP Code hai: $generatedOtp';
+      ..subject = 'Billio OTP - $generatedOtp'
+      ..text = 'Aapka OTP Code hai: $generatedOtp\n\nYe code kisi se share na karein.';
 
     try {
       await send(message, smtpServer);
       setState(() { isOtpSent = true; loading = false; });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("OTP bhej diya ${emailCtrl.text.trim()} pe")));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("OTP bhej diya ${emailCtrl.text.trim()} pe"), backgroundColor: Colors.green));
     } catch (e) {
       setState(() => loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Email Fail: $e")));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Email Fail: $e"), backgroundColor: Colors.red, duration: Duration(seconds: 6)));
     }
   }
 
   Future<void> verifyAndCreate() async {
     if (otpCtrl.text.trim() != generatedOtp) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Galat OTP")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Galat OTP"), backgroundColor: Colors.red));
       return;
     }
     setState(() => loading = true);
     try {
+      // Pehle signout karo taake purana cache clear ho
+      await FirebaseAuth.instance.signOut();
+
       UserCredential cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
           email: emailCtrl.text.trim(), password: passCtrl.text.trim());
 
-      // ہر ISP کا اپنا ڈاکومنٹ بنے گا isps/{uid}
       String collectionName = isIspMode ? 'isps' : 'customers';
       await FirebaseFirestore.instance.collection(collectionName).doc(cred.user!.uid).set({
+        'biz_name': 'Billio',
+        'companyName': 'Billio',
         'email': emailCtrl.text.trim(),
         'role': isIspMode ? 'isp' : 'customer',
         'verified': true,
@@ -84,32 +111,51 @@ class _AuthScreenState extends State<AuthScreen> {
       });
 
       await FirebaseAuth.instance.signOut();
-      setState(() { isLoginMode = true; isOtpSent = false; loading = false; });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("ID Ban Gayi! Ab Login Karo")));
+      setState(() { isLoginMode = true; isOtpSent = false; loading = false; generatedOtp = ""; otpCtrl.clear(); });
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("ID Ban Gayi! Ab Login Karo"), backgroundColor: Colors.green));
       if (mounted) Navigator.pop(context);
     } on FirebaseAuthException catch (e) {
       setState(() => loading = false);
       String msg = e.message ?? "Error";
-      if (e.code == 'email-already-in-use') msg = "Ye Gmail pehle se bani hui hai, Login karo";
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      if (e.code == 'email-already-in-use') {
+        msg = "Ye Gmail pehle se bani hui hai! Firebase Console > Authentication me ja ke delete karo phir nayi banao, ya Login karo";
+      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red, duration: Duration(seconds: 6)));
     }
   }
 
   Future<void> login() async {
     if (emailCtrl.text.trim().isEmpty || passCtrl.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Email aur Password likho")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Email aur Password likho"), backgroundColor: Colors.red));
       return;
     }
     setState(() => loading = true);
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
+      UserCredential cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
           email: emailCtrl.text.trim(), password: passCtrl.text.trim());
+
+      // FIX 2: Check karo Firestore me data hai ya delete ho gaya
+      String collectionName = isIspMode ? 'isps' : 'customers';
+      var doc = await FirebaseFirestore.instance.collection(collectionName).doc(cred.user!.uid).get();
+
+      if (!doc.exists) {
+        // Data delete ho chuka hai
+        await FirebaseAuth.instance.signOut();
+        var prefs = await SharedPreferences.getInstance();
+        await prefs.clear();
+        if (mounted) {
+          setState(() => loading = false);
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Is ID ka data delete ho chuka hai, nayi ID banao"), backgroundColor: Colors.orange, duration: Duration(seconds: 5)));
+        }
+        return;
+      }
+      // Agar data hai to login success - main.dart auto navigate kar dega
     } on FirebaseAuthException catch (e) {
       setState(() => loading = false);
       String msg = "Login Fail: ${e.code}";
       if (e.code == 'user-not-found') msg = "Ye ID bani hui nahi hai, Pehle ID banao";
-      if (e.code == 'wrong-password' || e.code == 'invalid-credential') msg = "Password galat hai";
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+      if (e.code == 'wrong-password' || e.code == 'invalid-credential' || e.code == 'invalid-email') msg = "Password ya Email galat hai";
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
     }
   }
 

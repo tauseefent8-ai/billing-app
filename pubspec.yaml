@@ -28,6 +28,10 @@ dependencies:
   excel: ^4.0.6
   file_picker: ^8.1.2
   open_file: ^3.3.2
+  # PART 2 NEW - 3 lines add ki hain
+  provider: ^6.1.2
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
 
 dev_dependencies:
   flutter_test:

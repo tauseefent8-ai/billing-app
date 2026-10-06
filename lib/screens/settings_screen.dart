@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -16,6 +17,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String bizName = "";
   String dueDate = "10";
   String waTemplate = "";
+  final _firestore = FirebaseFirestore.instance;
 
   @override
   void initState(){
@@ -25,10 +27,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   _loadInfo() async {
     final p = await SharedPreferences.getInstance();
+    String? uid = FirebaseAuth.instance.currentUser?.uid;
+    String firebaseName = "";
+    try{
+      if(uid!=null){
+        var doc = await _firestore.collection('isps').doc(uid).get();
+        if(doc.exists){
+          firebaseName = doc.data()?['biz_name']?? doc.data()?['companyName']?? "";
+        }
+      }
+    }catch(e){}
+
     setState(() {
-      bizName = p.getString('biz_name') ?? "My Wifi Business";
-      dueDate = p.getString('bill_due_date') ?? "10";
-      waTemplate = p.getString('wa_template') ?? "Salam {name}, aapka {package} ka bill Rs.{amount} hai.";
+      bizName = firebaseName.isNotEmpty? firebaseName : (p.getString('biz_name')?? "ISP PENNEL"); // POINT 9 - pehle "My Wifi Business" tha
+      dueDate = p.getString('bill_due_date')?? "10";
+      waTemplate = p.getString('wa_template')?? "Salam {name}, aapka {package} ka bill Rs.{amount} hai.";
     });
   }
 
@@ -74,7 +87,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final p = await SharedPreferences.getInstance();
     String? uid = FirebaseAuth.instance.currentUser?.uid;
     Map<String, dynamic> allData = {};
-    // --- YAHAN FIX KIYA HAI - AB UID KE HISAB SE BACKUP HOGA ---
     allData['bills'] = p.getString('bills_$uid');
     allData['collections'] = p.getString('collections_$uid');
     allData['customers'] = p.getString('users_data_$uid');
@@ -98,6 +110,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ));
   }
 
+  // POINT 8 - Logout sirf Setting me + 3 sec loading + Firebase save - FULL METHOD
+  Future<void> logoutWithSave() async {
+    bool? confirm = await showDialog<bool>(
+        context: context,
+        builder: (c)=> AlertDialog(
+          backgroundColor: Color(0xFF1E1E1E),
+          title: Text('Logout Karna Hai?', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+          content: Text('Aapka sara data Firebase me save ho raha hai, 3 second lagega. Logout karna hai?', style: GoogleFonts.poppins(color: Colors.white70, fontSize: 13)),
+          actions: [
+            TextButton(onPressed: ()=> Navigator.pop(c,false), child: Text('Nahi')),
+            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: ()=> Navigator.pop(c,true), child: Text('Haan Logout Karo', style: GoogleFonts.poppins(color: Colors.white))),
+          ],
+        )
+    );
+    if(confirm!=true) return;
+
+    showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (c)=> Dialog(
+          backgroundColor: Color(0xFF1E1E1E),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(color: Color(0xFF7C4DFF)),
+                const SizedBox(height: 16),
+                Text('Save ho raha hai...', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                Text('Firebase me data save ho raha hai, 3 second intezar karo', style: GoogleFonts.poppins(fontSize: 11, color: Colors.white54)),
+              ],
+            ),
+          ),
+        )
+    );
+
+    try {
+      String? uid = FirebaseAuth.instance.currentUser?.uid;
+      if(uid!=null){
+        await _firestore.collection('isps').doc(uid).set({
+          'biz_name': bizName,
+          'companyName': bizName,
+          'lastLogout': FieldValue.serverTimestamp(),
+          'lastUpdated': FieldValue.serverTimestamp(),
+        }, SetOptions(merge:true));
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('biz_name', bizName.isEmpty? "ISP PENNEL" : bizName);
+      }
+      await Future.delayed(const Duration(seconds: 3));
+      if(mounted) Navigator.pop(context);
+      await FirebaseAuth.instance.signOut();
+    } catch(e){
+      if(mounted) Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Logout Error: $e'), backgroundColor: Colors.red));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -107,7 +178,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.all(12),
         children: [
           _buildTitle("BUSINESS"),
-          _buildTile(Icons.store, "Business Info", bizName, _showBusinessDialog),
+          _buildTile(Icons.store, "Business Info", bizName.isEmpty? "ISP PENNEL" : bizName, _showBusinessDialog),
           _buildTile(Icons.attach_money, "Package Cost (Kharid Rate)", "Profit sahi nikalne ke liye", _showCostDialog, color: Colors.green),
           const Divider(color: Colors.white12),
           _buildTitle("BILLING"),
@@ -116,7 +187,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(color: Colors.white12),
           _buildTitle("APP"),
           _buildTile(Icons.backup, "Backup & Restore", "Data mehfooz rakhein", _showBackupDialog),
-          _buildTile(Icons.info, "App Version", "v1.0 - Bilal Wifi Manager", (){}),
+          _buildTile(Icons.info, "App Version", "v1.0 - ISP PENNEL", (){}),
+          const Divider(color: Colors.white12),
+          _buildTitle("ACCOUNT"),
+          Card(
+            color: const Color(0xFF1E1E1E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: ListTile(
+              leading: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.red.withOpacity(0.2), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.logout, color: Colors.redAccent, size: 20)),
+              title: Text("Logout - 3 Sec Save", style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600, fontSize: 14)),
+              subtitle: Text(FirebaseAuth.instance.currentUser?.email?? "", style: const TextStyle(color: Colors.white54, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white38),
+              onTap: logoutWithSave,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Center(child: Text("ISP PENNEL - Roman Urdu - Jama Karo, Wasooli Karo, Baqaya, Kharcha", style: GoogleFonts.poppins(fontSize: 10, color: Colors.white38))),
         ],
       ),
     );
@@ -139,7 +225,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// --- Business Info Dialog ---
 class BusinessInfoDialog extends StatefulWidget {
   const BusinessInfoDialog({super.key});
   @override
@@ -149,23 +234,22 @@ class _BusinessInfoDialogState extends State<BusinessInfoDialog> {
   final nameC = TextEditingController(); final phoneC = TextEditingController();
   @override
   void initState(){ super.initState(); _load(); }
-  _load() async { final p = await SharedPreferences.getInstance(); setState((){ nameC.text = p.getString('biz_name') ?? ''; phoneC.text = p.getString('biz_phone') ?? '';});}
+  _load() async { final p = await SharedPreferences.getInstance(); setState((){ nameC.text = p.getString('biz_name')?? 'ISP PENNEL'; phoneC.text = p.getString('biz_phone')?? '';});}
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: const Color(0xFF1E1E1E),
       title: const Text("Business Info", style: TextStyle(color: Colors.white)),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: nameC, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Dukan ka Naam", labelStyle: TextStyle(color: Colors.white54))),
+        TextField(controller: nameC, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Dukan ka Naam - Default ISP PENNEL", labelStyle: TextStyle(color: Colors.white54), hintText: "ISP PENNEL", hintStyle: TextStyle(color: Colors.white38))),
         const SizedBox(height: 10),
         TextField(controller: phoneC, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "WhatsApp Number", labelStyle: TextStyle(color: Colors.white54))),
       ]),
-      actions: [TextButton(onPressed: () async { final p = await SharedPreferences.getInstance(); await p.setString('biz_name', nameC.text); await p.setString('biz_phone', phoneC.text); if(context.mounted) Navigator.pop(context);}, child: const Text("Save"))],
+      actions: [TextButton(onPressed: () async { final p = await SharedPreferences.getInstance(); await p.setString('biz_name', nameC.text.isEmpty? "ISP PENNEL" : nameC.text); await p.setString('biz_phone', phoneC.text); if(context.mounted) Navigator.pop(context);}, child: const Text("Save"))],
     );
   }
 }
 
-// --- Package Cost Dialog ---
 class PackageCostDialog extends StatefulWidget {
   const PackageCostDialog({super.key});
   @override
