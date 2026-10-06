@@ -4,6 +4,7 @@ import '../services/firebase_service.dart';
 import '../services/sms_reminder_service.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
+import '../services/mikrotik_service.dart'; // MIKROTIK - ADDED
 
 class UsersScreen extends StatefulWidget {
   final List<dynamic> users;
@@ -47,11 +48,28 @@ class _UsersScreenState extends State<UsersScreen> {
           bool isExpired = false;
           if(u['expiryDate']!=null){ try{ if(DateTime.now().isAfter(DateTime.fromMillisecondsSinceEpoch(u['expiryDate']))) isExpired=true; }catch(e){} }
           return Container(margin: EdgeInsets.symmetric(horizontal: 12, vertical: 4), decoration: BoxDecoration(color: Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(12), border: Border.all(color: isExpired? Colors.red.withOpacity(0.3) : Colors.green.withOpacity(0.3))), child: ListTile(leading: CircleAvatar(backgroundColor: isExpired? Colors.red : Colors.green, child: Icon(isExpired? Icons.warning : Icons.person, color: Colors.white, size: 18)), title: Text(u['name'].toString(), style: GoogleFonts.poppins(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)), subtitle: Text("${u['phone']} | Rs.${u['amount']} | Due Rs.${u['pendingDue']??0}", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 10)), trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+            // MIKROTIK - BLOCK BUTTON ADDED
+            IconButton(icon: Icon(Icons.router, color: Colors.orange, size: 18), onPressed: () async {
+              String uname = (u['username']?? u['phone']).toString();
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$uname ko Mikrotik se Disable kar raha hun...")));
+              var result = await MikrotikService.disableUser(uname);
+              if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result['msg']), backgroundColor: result['ok']? Colors.orange : Colors.red));
+            }),
+            // MIKROTIK - ENABLE BUTTON ADDED
+            IconButton(icon: Icon(Icons.wifi, color: Colors.lightBlueAccent, size: 18), onPressed: () async {
+              String uname = (u['username']?? u['phone']).toString();
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$uname ko Mikrotik se Enable kar raha hun...")));
+              var result = await MikrotikService.enableUser(uname);
+              if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result['msg']), backgroundColor: result['ok']? Colors.green : Colors.red));
+            }),
             IconButton(icon: Icon(Icons.message, color: Colors.greenAccent, size: 18), onPressed: ()=> SmsReminderService.sendWhatsAppReminder(u['phone'].toString(), u['name'].toString(), FirebaseService.parseAmount(u['amount']))),
             IconButton(icon: Icon(Icons.delete, color: Colors.redAccent, size: 18), onPressed: () async {
               bool confirm = await showDialog(context: context, builder: (ctx)=> AlertDialog(backgroundColor: Color(0xFF1E1E1E), title: Text("User Delete?", style: GoogleFonts.poppins(color: Colors.white, fontSize: 14)), content: Text("${u['name']} ko delete karna hai? Bill undo me rahega, delete nahi hoga.", style: GoogleFonts.poppins(color: Colors.white70, fontSize: 12)), actions: [TextButton(onPressed: ()=> Navigator.pop(ctx,false), child: Text("Nahi")), TextButton(onPressed: ()=> Navigator.pop(ctx,true), child: Text("Haan", style: TextStyle(color: Colors.red)))]))?? false;
               if(!confirm) return;
-              try{ await FirebaseService.usersCol.doc(u['phone'].toString()).delete(); provider.removeUserLocal(u['phone'].toString()); widget.onUsersUpdate(); if(mounted){ ScaffoldMessenger.of(context).clearSnackBars(); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${u['name']} delete ho gaya, bill undo me hai"), backgroundColor: Colors.orange, duration: Duration(seconds: 5))); } }catch(e){}
+              // MIKROTIK - DELETE PE BHI DISABLE
+              String uname = (u['username']?? u['phone']).toString();
+              await MikrotikService.disableUser(uname);
+              try{ await FirebaseService.usersCol.doc(u['phone'].toString()).delete(); provider.removeUserLocal(u['phone'].toString()); widget.onUsersUpdate(); if(mounted){ ScaffoldMessenger.of(context).clearSnackBars(); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${u['name']} delete ho gaya, bill undo me hai + Mikrotik se bhi disable"), backgroundColor: Colors.orange, duration: Duration(seconds: 5))); } }catch(e){}
             }),
           ])));
         })),
