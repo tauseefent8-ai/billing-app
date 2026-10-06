@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'mikrotik_setting_screen.dart'; // <-- YE ADD KIYA HAI
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -39,7 +40,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }catch(e){}
 
     setState(() {
-      bizName = firebaseName.isNotEmpty? firebaseName : (p.getString('biz_name')?? "ISP PENNEL"); // POINT 9 - pehle "My Wifi Business" tha
+      bizName = firebaseName.isNotEmpty? firebaseName : (p.getString('biz_name')?? "ISP PENNEL");
       dueDate = p.getString('bill_due_date')?? "10";
       waTemplate = p.getString('wa_template')?? "Salam {name}, aapka {package} ka bill Rs.{amount} hai.";
     });
@@ -110,7 +111,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ));
   }
 
-  // POINT 8 - Logout sirf Setting me + 3 sec loading + Firebase save - FULL METHOD
   Future<void> logoutWithSave() async {
     bool? confirm = await showDialog<bool>(
         context: context,
@@ -177,6 +177,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
+          // === YAHAN MIKROTIK KA BUTTON ADD KIYA HAI ===
+          _buildTitle("NETWORKING"),
+          _buildTile(Icons.router, "Mikrotik Control", "Router se users add / active / disable karo", (){
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const MikrotikSettingScreen()));
+          }, color: Colors.orange),
+          const Divider(color: Colors.white12),
+          // === END ===
+
           _buildTitle("BUSINESS"),
           _buildTile(Icons.store, "Business Info", bizName.isEmpty? "ISP PENNEL" : bizName, _showBusinessDialog),
           _buildTile(Icons.attach_money, "Package Cost (Kharid Rate)", "Profit sahi nikalne ke liye", _showCostDialog, color: Colors.green),
