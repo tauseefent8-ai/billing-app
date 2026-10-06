@@ -1,17 +1,20 @@
-# internet_billing
+# Billio - Internet Billing App 📡
 
-A new Flutter project.
+Pakistan ke Local ISPs ke liye banayi gayi professional billing app. Ab koi fake ID nahi banegi, har ID Gmail OTP se verify hogi.
 
-## Getting Started
+### ✨ Main Features
+- **ISP Login:** Gmail OTP ke saath secure account creation
+- **Customer Login:** Customer apna bill check kar sakta hai
+- **Forgot Password:** Nayi screen - Gmail pe OTP, phir naya password
+- **Billing System:** User add, Bill generate, Collection, Expense
+- **Safe Delete:** ARZI button se sara test data delete
 
-This project is a starting point for a Flutter application.
+### 🔧 Fix Jo Kiya Hai (Latest Update)
+- Pehle koi bhi `@gmail.com` likh ke ID ban jati thi, ab nahi banegi
+- Create Account pe pehle OTP jayega, OTP sahi hoga tab hi ID banegi
+- Forgot Password pe ab nayi screen khulti hai
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+### 🚀 Run Kaise Karna Hai
+```bash
+flutter pub get
+flutter run
