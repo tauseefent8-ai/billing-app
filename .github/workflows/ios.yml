@@ -1,0 +1,41 @@
+name: Build iOS IPA
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    name: Build iOS IPA (no codesign)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: 'stable'
+          cache: true
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build iOS Release (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Create IPA (unsigned)
+        run: |
+          cd build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -r -y ../billing-app-unsigned.ipa Payload
+          cd ../../..
+          ls -lh build/ios/*.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: billing-app-ipa
+          path: build/ios/billing-app-unsigned.ipa
+          retention-days: 7
