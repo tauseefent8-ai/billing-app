@@ -19,7 +19,6 @@ import 'screens/reports_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/bills_screen.dart';
 import 'screens/login_screen.dart';
-// PART 3 NEW IMPORTS
 import 'screens/expense_screen.dart';
 import 'screens/customer_dashboard.dart';
 
@@ -49,18 +48,38 @@ class MyApp extends StatelessWidget {
 class AuthWrapper extends StatelessWidget {
   const AuthWrapper({super.key});
 
+  // FIXED PART 2: Pehle 1000 queries lagti thi, ab sirf 2 queries lagegi - Collection Group Query
   Future<bool> isCustomer(String email, String phone) async {
     try{
-      var isps = await FirebaseFirestore.instance.collection('isps').get();
-      for(var ispDoc in isps.docs){
-        var snap = await ispDoc.reference.collection('my_users').where('email', isEqualTo: email).limit(1).get();
+      if(email.isEmpty && phone.isEmpty) return false;
+      
+      // Direct collectionGroup search - fast & cheap
+      if(email.isNotEmpty){
+        var snap = await FirebaseFirestore.instance.collectionGroup('my_users').where('email', isEqualTo: email).limit(1).get();
         if(snap.docs.isNotEmpty) return true;
-        if(phone.isNotEmpty){
-          var snap2 = await ispDoc.reference.collection('my_users').where('phone', isEqualTo: phone).limit(1).get();
-          if(snap2.docs.isNotEmpty) return true;
+      }
+      if(phone.isNotEmpty){
+        // Phone ko clean karke search karo
+        String cleanPhone = phone.replaceAll(RegExp(r'[^0-9]'), '');
+        var snap2 = await FirebaseFirestore.instance.collectionGroup('my_users').where('phone', isEqualTo: phone).limit(1).get();
+        if(snap2.docs.isNotEmpty) return true;
+        // Clean phone se bhi check
+        if(cleanPhone != phone){
+          var snap3 = await FirebaseFirestore.instance.collectionGroup('my_users').where('phone', isEqualTo: cleanPhone).limit(1).get();
+          if(snap3.docs.isNotEmpty) return true;
         }
       }
-    }catch(e){}
+    }catch(e){
+      debugPrint("isCustomer error: $e - Firestore Index chahiye hoga collectionGroup ke liye");
+      // Fallback purana tareeqa agar index na bana ho to
+      try{
+        var isps = await FirebaseFirestore.instance.collection('isps').limit(20).get();
+        for(var ispDoc in isps.docs){
+          var snap = await ispDoc.reference.collection('my_users').where('email', isEqualTo: email).limit(1).get();
+          if(snap.docs.isNotEmpty) return true;
+        }
+      }catch(e2){}
+    }
     return false;
   }
 
@@ -92,6 +111,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   int selectedIndex = 0;
   String bizName = "ISP PENNEL";
   String? profilePicPath;
+  bool picExists = false;
   final _firestore = FirebaseFirestore.instance;
   String get uid => FirebaseAuth.instance.currentUser?.uid?? "";
   late AnimationController _controller; late Animation<double> _fadeAnim;
@@ -104,9 +124,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   _loadBizInfo() async {
     final p = await SharedPreferences.getInstance();
     String? savedPic = p.getString('profile_pic_$uid');
-    String savedName = p.getString('biz_name')?? "ISP PENNEL";
+    String savedName = p.getString('biz_name_$uid') ?? p.getString('biz_name') ?? "ISP PENNEL";
+    bool exists = false;
+    if(savedPic != null && !kIsWeb){
+      try{ exists = File(savedPic).existsSync(); }catch(e){ exists = false; }
+    }
     try{ if(uid.isNotEmpty){ var doc = await _firestore.collection('isps').doc(uid).get(); if(doc.exists){ String fbName = doc.data()?['biz_name']?? doc.data()?['companyName']?? ""; if(fbName.isNotEmpty) savedName = fbName; } } }catch(e){}
-    setState((){ bizName = savedName.isEmpty? "ISP PENNEL" : savedName; profilePicPath = savedPic; });
+    if(mounted) setState((){ bizName = savedName.isEmpty? "ISP PENNEL" : savedName; profilePicPath = savedPic; picExists = exists; });
   }
 
   Future<void> pickProfilePic() async {
@@ -120,11 +144,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     ])));
   }
   Future<void> _savePic(XFile file) async {
-    try{ final p = await SharedPreferences.getInstance(); final dir = await getApplicationDocumentsDirectory(); final newFile = File('${dir.path}/profile_$uid.jpg'); await newFile.writeAsBytes(await file.readAsBytes()); await p.setString('profile_pic_$uid', newFile.path); setState(()=> profilePicPath = newFile.path); if(mounted){ ScaffoldMessenger.of(context).clearSnackBars(); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Profile photo save ho gayi"), backgroundColor: Colors.green, duration: Duration(seconds: 5))); } }catch(e){ if(mounted){ ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red, duration: Duration(seconds: 5))); } }
+    try{ final p = await SharedPreferences.getInstance(); final dir = await getApplicationDocumentsDirectory(); final newFile = File('${dir.path}/profile_$uid.jpg'); await newFile.writeAsBytes(await file.readAsBytes()); await p.setString('profile_pic_$uid', newFile.path); if(mounted) setState((){ profilePicPath = newFile.path; picExists = true; }); if(mounted){ ScaffoldMessenger.of(context).clearSnackBars(); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Profile photo save ho gayi"), backgroundColor: Colors.green, duration: Duration(seconds: 5))); } }catch(e){ if(mounted){ ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red, duration: Duration(seconds: 5))); } }
   }
   void _editCompanyName(){
     TextEditingController c = TextEditingController(text: bizName);
-    showDialog(context: context, builder: (ctx)=> AlertDialog(backgroundColor: Color(0xFF1E1E1E), title: Text("Company Name Edit Karo", style: GoogleFonts.poppins(color: Colors.white, fontSize: 14)), content: TextField(controller: c, style: TextStyle(color: Colors.white), decoration: InputDecoration(labelText: "Company Name", hintText: "ISP PENNEL", labelStyle: TextStyle(color: Colors.white54))), actions: [TextButton(onPressed: ()=> Navigator.pop(ctx), child: Text("Cancel")), ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF7C4DFF)), onPressed: () async { final p = await SharedPreferences.getInstance(); String newName = c.text.trim().isEmpty? "ISP PENNEL" : c.text.trim(); await p.setString('biz_name', newName); if(uid.isNotEmpty){ await _firestore.collection('isps').doc(uid).set({'biz_name': newName, 'companyName': newName}, SetOptions(merge:true)); } setState(()=> bizName = newName); if(mounted) Navigator.pop(ctx); if(mounted){ ScaffoldMessenger.of(context).clearSnackBars(); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Company name $newName save ho gaya"), backgroundColor: Colors.green, duration: Duration(seconds: 5))); } }, child: Text("Save"))],));
+    showDialog(context: context, builder: (ctx)=> AlertDialog(backgroundColor: Color(0xFF1E1E1E), title: Text("Company Name Edit Karo", style: GoogleFonts.poppins(color: Colors.white, fontSize: 14)), content: TextField(controller: c, style: TextStyle(color: Colors.white), decoration: InputDecoration(labelText: "Company Name", hintText: "ISP PENNEL", labelStyle: TextStyle(color: Colors.white54))), actions: [TextButton(onPressed: ()=> Navigator.pop(ctx), child: Text("Cancel")), ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF7C4DFF)), onPressed: () async { final p = await SharedPreferences.getInstance(); String newName = c.text.trim().isEmpty? "ISP PENNEL" : c.text.trim(); await p.setString('biz_name_$uid', newName); await p.setString('biz_name', newName); if(uid.isNotEmpty){ await _firestore.collection('isps').doc(uid).set({'biz_name': newName, 'companyName': newName}, SetOptions(merge:true)); } if(mounted) setState(()=> bizName = newName); if(mounted) Navigator.pop(ctx); if(mounted){ ScaffoldMessenger.of(context).clearSnackBars(); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Company name $newName save ho gaya"), backgroundColor: Colors.green, duration: Duration(seconds: 5))); } }, child: Text("Save"))],));
   }
 
   @override
@@ -146,7 +170,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         IconButton(icon: Icon(Icons.refresh, color: Colors.white70), onPressed: ()=> provider.initAll()),
       ]),
       drawer: Drawer(backgroundColor: const Color(0xFF1E1E1E), child: ListView(padding: EdgeInsets.zero, children: [
-        UserAccountsDrawerHeader(decoration: BoxDecoration(color: Color(0xFF7C4DFF)), currentAccountPicture: GestureDetector(onTap: pickProfilePic, child: CircleAvatar(backgroundColor: Colors.white, backgroundImage: profilePicPath!=null &&!kIsWeb && File(profilePicPath!).existsSync()? FileImage(File(profilePicPath!)) : null, child: profilePicPath==null? Icon(Icons.person, size: 40, color: Color(0xFF7C4DFF)) : null)), accountName: GestureDetector(onTap: _editCompanyName, child: Row(children: [Text(bizName, style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16)), SizedBox(width: 6), Icon(Icons.edit, size: 14, color: Colors.white70)])), accountEmail: Text(FirebaseAuth.instance.currentUser?.email?? "No Email", style: GoogleFonts.poppins(fontSize: 12))),
+        UserAccountsDrawerHeader(decoration: BoxDecoration(color: Color(0xFF7C4DFF)), currentAccountPicture: GestureDetector(onTap: pickProfilePic, child: CircleAvatar(backgroundColor: Colors.white, backgroundImage: profilePicPath!=null && picExists && !kIsWeb ? FileImage(File(profilePicPath!)) : null, child: profilePicPath==null || !picExists ? Icon(Icons.person, size: 40, color: Color(0xFF7C4DFF)) : null)), accountName: GestureDetector(onTap: _editCompanyName, child: Row(children: [Flexible(child: Text(bizName, style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16), overflow: TextOverflow.ellipsis)), SizedBox(width: 6), Icon(Icons.edit, size: 14, color: Colors.white70)])), accountEmail: Text(FirebaseAuth.instance.currentUser?.email?? "No Email", style: GoogleFonts.poppins(fontSize: 12))),
         ListTile(leading: Icon(Icons.dashboard, color: Colors.white70), title: Text("Dashboard", style: GoogleFonts.poppins(color: Colors.white)), onTap: (){ setState(()=> selectedIndex=0); Navigator.pop(context); }),
         ListTile(leading: Icon(Icons.receipt, color: Colors.white70), title: Text("Bills", style: GoogleFonts.poppins(color: Colors.white)), onTap: (){ setState(()=> selectedIndex=1); Navigator.pop(context); }),
         ListTile(leading: Icon(Icons.people, color: Colors.white70), title: Text("Customers", style: GoogleFonts.poppins(color: Colors.white)), onTap: (){ setState(()=> selectedIndex=2); Navigator.pop(context); }),
