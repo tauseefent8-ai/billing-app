@@ -1,12 +1,10 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb; // CHROME FIX - ADDED
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:mailer/mailer.dart';
-import 'package:mailer/smtp_server.dart';
 import 'forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -25,8 +23,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool isOtpSent = false;
   String generatedOtp = "";
 
-  final String companyEmail = "tauseefent8@gmail.com";
-  final String appPassword = "enkwgxaohmygrnil";
+  // SECURE FIX: Gmail password hata diya, ab Firestore OTP use hoga
 
   Future<void> sendOtp() async {
     if (!emailCtrl.text.trim().contains("@gmail.com")) {
@@ -42,45 +39,23 @@ class _LoginScreenState extends State<LoginScreen> {
       generatedOtp = (100000 + Random().nextInt(900000)).toString();
     });
 
-    // CHROME FIX START - Web pe mailer kaam nahi karta
-    if (kIsWeb) {
-      // Web pe OTP ko Firestore me save karo taake verify ho sake, aur screen pe dikhao
-      try {
-        await FirebaseFirestore.instance.collection('email_otps').doc(emailCtrl.text.trim()).set({
-          'otp': generatedOtp,
-          'time': DateTime.now().millisecondsSinceEpoch,
-          'email': emailCtrl.text.trim(),
-        });
-        setState(() { isOtpSent = true; isLoading = false; });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text("WEB MODE: Aapka OTP hai $generatedOtp (Chrome pe Email nahi jata)"),
-              backgroundColor: Colors.blue,
-              duration: Duration(seconds: 8)
-          ));
-        }
-      } catch (e) {
-        setState(() => isLoading = false);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("OTP Error Web: $e"), backgroundColor: Colors.red));
-      }
-      return;
-    }
-    // CHROME FIX END
-
-    final smtpServer = gmail(companyEmail, appPassword);
-    final message = Message()
-      ..from = Address(companyEmail, 'Billio')
-      ..recipients.add(emailCtrl.text.trim())
-      ..subject = 'Billio OTP - $generatedOtp'
-      ..text = 'Aapka OTP hai: $generatedOtp';
-
     try {
-      await send(message, smtpServer);
+      await FirebaseFirestore.instance.collection('email_otps').doc(emailCtrl.text.trim()).set({
+        'otp': generatedOtp,
+        'time': DateTime.now().millisecondsSinceEpoch,
+        'email': emailCtrl.text.trim(),
+      });
       setState(() { isOtpSent = true; isLoading = false; });
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("OTP bhej diya ${emailCtrl.text.trim()} pe"), backgroundColor: Colors.green));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(kIsWeb ? "WEB MODE: Aapka OTP hai $generatedOtp" : "Aapka OTP hai $generatedOtp"),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 8)
+        ));
+      }
     } catch (e) {
       setState(() => isLoading = false);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("OTP Fail: $e"), backgroundColor: Colors.red, duration: Duration(seconds: 6)));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("OTP Error: $e"), backgroundColor: Colors.red));
     }
   }
 
@@ -118,6 +93,7 @@ class _LoginScreenState extends State<LoginScreen> {
           'createdAt': DateTime.now().millisecondsSinceEpoch,
           'verified': true,
         });
+        await FirebaseFirestore.instance.collection('email_otps').doc(emailCtrl.text.trim()).delete();
         await FirebaseAuth.instance.signOut();
         setState(() { isLogin = true; isOtpSent = false; generatedOtp = ""; otpCtrl.clear(); });
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("ID Ban Gayi! Ab Login Karo"), backgroundColor: Colors.green));
@@ -186,25 +162,18 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 14),
                 Text("Password", style: GoogleFonts.poppins(color: Colors.black87, fontSize: 13, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
-                TextField(controller: passCtrl, obscureText: obscure, style: const TextStyle(color: Colors.black87, fontSize: 14), decoration: InputDecoration(hintText: "Password", hintStyle: GoogleFonts.poppins(color: Colors.black26, fontSize: 14, fontWeight: FontWeight.w600), prefixIcon: const Icon(Icons.lock_outline, color: Colors.black26, size: 20), suffixIcon: IconButton(icon: Icon(obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined, color: Colors.black26, size: 20), onPressed: () => setState(() => obscure = !obscure)), filled: true, fillColor: const Color(0xFFF2F2F7), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
+                TextField(controller: passCtrl, obscureText: obscure, style: const TextStyle(color: Colors.black87, fontSize: 14), decoration: InputDecoration(hintText: "123456", prefixIcon: const Icon(Icons.lock_outline, color: Colors.black26, size: 20), suffixIcon: IconButton(icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: Colors.black26), onPressed: ()=> setState(()=> obscure = !obscure)), filled: true, fillColor: const Color(0xFFF2F2F7), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
                 if (!isLogin && isOtpSent) ...[
                   const SizedBox(height: 14),
-                  Text("OTP Code", style: GoogleFonts.poppins(color: Colors.black87, fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text("OTP", style: GoogleFonts.poppins(color: Colors.black87, fontSize: 13, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 6),
-                  TextField(controller: otpCtrl, keyboardType: TextInputType.number, style: const TextStyle(color: Colors.black87, fontSize: 14), decoration: InputDecoration(hintText: "6 digit OTP", prefixIcon: const Icon(Icons.shield_outlined, color: Colors.black26, size: 20), filled: true, fillColor: const Color(0xFFF2F2F7), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
-                  if(kIsWeb && generatedOtp.isNotEmpty) // CHROME PE OTP DIKHAO
-                    Padding(padding: EdgeInsets.only(top: 8), child: Text("Chrome Test OTP: $generatedOtp", style: GoogleFonts.poppins(color: Colors.blue, fontSize: 13, fontWeight: FontWeight.bold))),
+                  TextField(controller: otpCtrl, keyboardType: TextInputType.number, style: const TextStyle(color: Colors.black87, fontSize: 14), decoration: InputDecoration(hintText: "6 digits OTP", prefixIcon: const Icon(Icons.pin, color: Colors.black26, size: 20), filled: true, fillColor: const Color(0xFFF2F2F7), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
                 ],
+                const SizedBox(height: 20),
+                SizedBox(width: double.infinity, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF), padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))), onPressed: isLoading ? null : handleAuth, child: isLoading ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text(isLogin ? "Login" : (isOtpSent ? "Verify & Create" : "Send OTP"), style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)))),
                 const SizedBox(height: 10),
-                Align(alignment: Alignment.centerRight, child: TextButton(onPressed: forgotPass, child: Text("Forgot Password?", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontSize: 12, fontWeight: FontWeight.w600)))),
-                const SizedBox(height: 6),
-                SizedBox(width: double.infinity, height: 52, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0), onPressed: isLoading ? null : handleAuth, child: isLoading ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text(isLogin ? "Login" : isOtpSent ? "Verify & Create ID" : "OTP Bhejo", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)))),
-                const SizedBox(height: 10),
-                SizedBox(width: double.infinity, height: 52, child: OutlinedButton(style: OutlinedButton.styleFrom(side: const BorderSide(color: Color(0xFF7C4DFF), width: 1.2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))), onPressed: () => setState(() { isLogin = !isLogin; isOtpSent = false; }), child: Text(isLogin ? "New ISP? Create Account" : "Already have account? Login", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontWeight: FontWeight.w600, fontSize: 13)))),
-                const SizedBox(height: 14),
-                Divider(color: Colors.black12),
-                const SizedBox(height: 10),
-                SizedBox(width: double.infinity, height: 52, child: OutlinedButton(style: OutlinedButton.styleFrom(backgroundColor: Colors.red.withOpacity(0.08), side: const BorderSide(color: Colors.red, width: 1.2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))), onPressed: isLoading ? null : deleteAllFirebaseData, child: Text("ARZI - Sab IDs & Data Delete Karo", style: GoogleFonts.poppins(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 12)))),
+                Center(child: TextButton(onPressed: ()=> setState(()=> isLogin = !isLogin), child: Text(isLogin ? "Account nahi hai? Create karo" : "Already ID hai? Login karo", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontSize: 12, fontWeight: FontWeight.bold)))),
+                Center(child: TextButton(onPressed: forgotPass, child: Text("Password bhool gaye?", style: GoogleFonts.poppins(color: Colors.black54, fontSize: 11)))),
               ],
             ),
           ),
