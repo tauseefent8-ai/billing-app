@@ -4,8 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:mailer/mailer.dart';
-import 'package:mailer/smtp_server.dart';
 
 class IspForgotPasswordScreen extends StatefulWidget {
   const IspForgotPasswordScreen({super.key});
@@ -25,9 +23,6 @@ class _IspForgotPasswordScreenState extends State<IspForgotPasswordScreen> {
   final otpCtrl = TextEditingController();
   final passCtrl = TextEditingController();
   final confirmPassCtrl = TextEditingController();
-
-  final String companyEmail = "tauseefent8@gmail.com";
-  final String appPassword = "enkwgxaohmygrnil";
 
   Timer? _timer;
   int _seconds = 0;
@@ -50,37 +45,28 @@ class _IspForgotPasswordScreenState extends State<IspForgotPasswordScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sahi Gmail likho")));
       return;
     }
-
     setState(() => loading = true);
-
-    // --- YAHAN FIX KIYA HAI - AB FIRESTORE ME CHECK KAREGA ---
     try {
       var check = await FirebaseFirestore.instance.collection('isps').where('email', isEqualTo: emailCtrl.text.trim()).get();
       if (check.docs.isEmpty) {
-        // Agar isps me nahi mila to Auth me bhi try karo, ho sakta hai purani ID ho
-        // Lekin error nahi dikhana, direct OTP bhej dena taake kaam chale
-        print("Firestore me nahi mila, phir bhi OTP bhej rahe hain");
+        setState(()=> loading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Ye Gmail se koi ISP ID nahi bani hui"), backgroundColor: Colors.red));
+        return;
       }
-    } catch (e) {
-      print("Check error: $e");
-    }
-    // --- FIX KHATAM ---
-
-    generatedOtp = (100000 + Random().nextInt(900000)).toString();
-    final smtpServer = gmail(companyEmail, appPassword);
-    final message = Message()
-      ..from = Address(companyEmail, 'Tauseef Enterprises')
-      ..recipients.add(emailCtrl.text.trim())
-      ..subject = 'Password Reset OTP - $generatedOtp'
-      ..text = 'Aapka Password Reset OTP hai: $generatedOtp\nIsko kisi se share na kare.';
-    try {
-      await send(message, smtpServer);
+      String otp = (100000 + Random().nextInt(900000)).toString();
+      setState(()=> generatedOtp = otp);
+      await FirebaseFirestore.instance.collection('email_otps').doc(emailCtrl.text.trim()).set({
+        'otp': otp,
+        'time': DateTime.now().millisecondsSinceEpoch,
+        'email': emailCtrl.text.trim(),
+        'type': 'forgot'
+      });
       setState(() { isOtpSent = true; loading = false; });
       startTimer();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isResend ? "OTP Dobara Bhej Diya!" : "OTP bhej diya ${emailCtrl.text.trim()} pe")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isResend ? "OTP Dobara: $otp" : "Aapka OTP hai: $otp"), backgroundColor: Colors.green, duration: Duration(seconds: 8)));
     } catch (e) {
-      setState(() => loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Email Fail: $e")));
+      setState(()=> loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
     }
   }
 
@@ -91,37 +77,28 @@ class _IspForgotPasswordScreenState extends State<IspForgotPasswordScreen> {
     }
     setState(() { isOtpVerified = true; });
     _timer?.cancel();
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("OTP Verified! Naya Password Banao"), backgroundColor: Colors.green));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("OTP Verified! Ab Naya Password Banao"), backgroundColor: Colors.green));
   }
 
   Future<void> resetPassword() async {
     if (passCtrl.text.trim().length < 6) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Password kam se kam 6 harf ka ho")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Password 6 harf ka likho")));
       return;
     }
     if (passCtrl.text.trim() != confirmPassCtrl.text.trim()) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Password match nahi kar raha")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Password match nahi")));
       return;
     }
-    setState(() => loading = true);
+    setState(()=> loading = true);
     try {
       await FirebaseAuth.instance.sendPasswordResetEmail(email: emailCtrl.text.trim());
-
-      setState(() => loading = false);
-      if (mounted) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (c) => AlertDialog(
-            title: Text("Email Bhej Di Gayi!", style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
-            content: Text("Humne ${emailCtrl.text.trim()} pe password reset ka link bhej diya hai.\n\n1. Gmail kholo\n2. Link pe click karo\n3. Naya password set karo\n\nAapka purana data safe rahega.", style: GoogleFonts.poppins(fontSize: 13)),
-            actions: [TextButton(onPressed: () { Navigator.pop(c); Navigator.pop(context); }, child: const Text("OK"))],
-          ),
-        );
-      }
+      await FirebaseFirestore.instance.collection('email_otps').doc(emailCtrl.text.trim()).delete();
+      setState(()=> loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Password Reset Email bhej diya hai ${emailCtrl.text.trim()} pe - Check karo"), backgroundColor: Colors.green, duration: Duration(seconds: 6)));
+      Navigator.pop(context);
     } catch (e) {
-      setState(() => loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+      setState(()=> loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
     }
   }
 
@@ -129,43 +106,35 @@ class _IspForgotPasswordScreenState extends State<IspForgotPasswordScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
-      appBar: AppBar(backgroundColor: const Color(0xFF121212), leading: IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: ()=> Navigator.pop(context)), title: Text("Forgot Password", style: GoogleFonts.poppins(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold))),
+      appBar: AppBar(backgroundColor: const Color(0xFF121212), leading: IconButton(icon: Icon(Icons.arrow_back, color: Colors.white), onPressed: ()=> Navigator.pop(context)), title: Text("Forgot Password", style: GoogleFonts.poppins(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold))),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Container(
             width: 420,
-            padding: const EdgeInsets.all(26),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(28)),
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Center(child: Icon(Icons.lock_reset, size: 50, color: Color(0xFF7C4DFF))),
-                const SizedBox(height: 14),
-                Center(child: Text(isOtpVerified ? "New Password" : isOtpSent ? "Verify OTP" : "Forgot Password", style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black))),
-                Center(child: Text(isOtpVerified ? "Naya password banao" : isOtpSent ? "OTP Gmail pe bheja gaya" : "Purani Gmail se OTP lo", style: GoogleFonts.poppins(fontSize: 12, color: Colors.black54))),
-                const SizedBox(height: 24),
-                _label("Registered Gmail ID"),
-                TextField(controller: emailCtrl, enabled: !isOtpSent, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "you@gmail.com", prefixIcon: const Icon(Icons.email_outlined), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
-                if (isOtpSent && !isOtpVerified) ...[
-                  const SizedBox(height: 14),
-                  _label("OTP Code"),
-                  TextField(controller: otpCtrl, keyboardType: TextInputType.number, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "6 digit OTP", prefixIcon: const Icon(Icons.shield_outlined), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
+                Text("Password Bhool Gaye?", style: GoogleFonts.poppins(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
+                SizedBox(height: 16),
+                TextField(controller: emailCtrl, style: TextStyle(color: Colors.black), decoration: InputDecoration(labelText: "Apni Gmail Likho", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
+                SizedBox(height: 12),
+                if(isOtpSent)...[
+                  TextField(controller: otpCtrl, style: TextStyle(color: Colors.black), decoration: InputDecoration(labelText: "OTP", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
+                  SizedBox(height: 8),
+                  Row(children: [
+                    ElevatedButton(onPressed: verifyOtp, style: ElevatedButton.styleFrom(backgroundColor: Colors.green), child: Text("Verify", style: TextStyle(color: Colors.white))),
+                    SizedBox(width: 10),
+                    if(canResend) TextButton(onPressed: ()=> sendOtp(isResend: true), child: Text("Resend")) else Text("$_seconds sec", style: TextStyle(fontSize: 12)),
+                  ]),
+                  if(isOtpVerified)...[
+                    SizedBox(height: 12),
+                    Text("Ab aapko email pe password reset ka link bhej diya jayega", style: GoogleFonts.poppins(fontSize: 11, color: Colors.black54)),
+                  ]
                 ],
-                if (isOtpVerified) ...[
-                  const SizedBox(height: 14),
-                  _label("New Password"),
-                  TextField(controller: passCtrl, obscureText: obscure, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "Naya password", prefixIcon: const Icon(Icons.lock_outline), suffixIcon: IconButton(icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, size: 20), onPressed: ()=> setState(()=> obscure = !obscure)), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
-                  const SizedBox(height: 14),
-                  _label("Confirm New Password"),
-                  TextField(controller: confirmPassCtrl, obscureText: obscure2, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "Password dobara likho", prefixIcon: const Icon(Icons.lock_outline), suffixIcon: IconButton(icon: Icon(obscure2 ? Icons.visibility_off : Icons.visibility, size: 20), onPressed: ()=> setState(()=> obscure2 = !obscure2)), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
-                ],
-                const SizedBox(height: 22),
-                SizedBox(width: double.infinity, height: 54, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0), onPressed: loading ? null : () { if (!isOtpSent) { sendOtp(); } else if (!isOtpVerified) { verifyOtp(); } else { resetPassword(); } }, child: loading ? const CircularProgressIndicator(color: Colors.white) : Text(!isOtpSent ? "OTP Bhejo" : !isOtpVerified ? "Verify OTP" : "Reset Link Bhejo", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)))),
-                if (isOtpSent && !isOtpVerified) ...[
-                  const SizedBox(height: 12),
-                  Center(child: canResend ? TextButton(onPressed: loading ? null : () => sendOtp(isResend: true), child: Text("Resend OTP", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontWeight: FontWeight.bold, fontSize: 13))) : Text("Resend OTP in $_seconds sec", style: GoogleFonts.poppins(color: Colors.black54, fontSize: 13))),
-                ],
+                SizedBox(height: 20),
+                SizedBox(width: double.infinity, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF7C4DFF), padding: EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), onPressed: loading? null : (){ if(!isOtpSent){ sendOtp(); } else if(!isOtpVerified){ verifyOtp(); } else { resetPassword(); } }, child: loading? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text(isOtpSent? (isOtpVerified? "Send Reset Email" : "Verify OTP") : "Send OTP", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)))),
               ],
             ),
           ),
@@ -173,5 +142,4 @@ class _IspForgotPasswordScreenState extends State<IspForgotPasswordScreen> {
       ),
     );
   }
-  Widget _label(String t) => Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(t, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.black87)));
 }
