@@ -1,12 +1,13 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb; // CHROME FIX - ADDED
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mailer/mailer.dart';
 import 'package:mailer/smtp_server.dart';
-import 'forgot_password_screen.dart'; // <-- YE ADD KIYA HAI
+import 'forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -40,6 +41,32 @@ class _LoginScreenState extends State<LoginScreen> {
       isLoading = true;
       generatedOtp = (100000 + Random().nextInt(900000)).toString();
     });
+
+    // CHROME FIX START - Web pe mailer kaam nahi karta
+    if (kIsWeb) {
+      // Web pe OTP ko Firestore me save karo taake verify ho sake, aur screen pe dikhao
+      try {
+        await FirebaseFirestore.instance.collection('email_otps').doc(emailCtrl.text.trim()).set({
+          'otp': generatedOtp,
+          'time': DateTime.now().millisecondsSinceEpoch,
+          'email': emailCtrl.text.trim(),
+        });
+        setState(() { isOtpSent = true; isLoading = false; });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text("WEB MODE: Aapka OTP hai $generatedOtp (Chrome pe Email nahi jata)"),
+              backgroundColor: Colors.blue,
+              duration: Duration(seconds: 8)
+          ));
+        }
+      } catch (e) {
+        setState(() => isLoading = false);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("OTP Error Web: $e"), backgroundColor: Colors.red));
+      }
+      return;
+    }
+    // CHROME FIX END
+
     final smtpServer = gmail(companyEmail, appPassword);
     final message = Message()
       ..from = Address(companyEmail, 'Billio')
@@ -126,7 +153,6 @@ class _LoginScreenState extends State<LoginScreen> {
     if(mounted) setState(()=> isLoading=false);
   }
 
-  // YAHAN CHANGE KIYA HAI - AB NAYI SCREEN KHULEGI
   Future<void> forgotPass() async {
     Navigator.push(context, MaterialPageRoute(builder: (c) => const ForgotPasswordScreen()));
   }
@@ -166,6 +192,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text("OTP Code", style: GoogleFonts.poppins(color: Colors.black87, fontSize: 13, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 6),
                   TextField(controller: otpCtrl, keyboardType: TextInputType.number, style: const TextStyle(color: Colors.black87, fontSize: 14), decoration: InputDecoration(hintText: "6 digit OTP", prefixIcon: const Icon(Icons.shield_outlined, color: Colors.black26, size: 20), filled: true, fillColor: const Color(0xFFF2F2F7), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
+                  if(kIsWeb && generatedOtp.isNotEmpty) // CHROME PE OTP DIKHAO
+                    Padding(padding: EdgeInsets.only(top: 8), child: Text("Chrome Test OTP: $generatedOtp", style: GoogleFonts.poppins(color: Colors.blue, fontSize: 13, fontWeight: FontWeight.bold))),
                 ],
                 const SizedBox(height: 10),
                 Align(alignment: Alignment.centerRight, child: TextButton(onPressed: forgotPass, child: Text("Forgot Password?", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontSize: 12, fontWeight: FontWeight.w600)))),
