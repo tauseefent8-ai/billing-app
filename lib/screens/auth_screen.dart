@@ -3,8 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:mailer/mailer.dart';
-import 'package:mailer/smtp_server.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthScreen extends StatefulWidget {
@@ -28,37 +26,31 @@ class _AuthScreenState extends State<AuthScreen> {
   final passCtrl = TextEditingController();
   final otpCtrl = TextEditingController();
 
-  final String companyEmail = "tauseefent8@gmail.com";
-  final String appPassword = "enkwgxaohmygrnil";
-
   @override
   void initState() {
     super.initState();
     isIspMode = !widget.isCustomer;
     isLoginMode = !widget.isCreateMode;
-    _forceLogoutIfDeleted(); // FIX
+    _forceLogoutIfDeleted();
   }
 
-  // FIX 1: Agar ID Firebase se delete hui hai to force logout karo
   Future<void> _forceLogoutIfDeleted() async {
     try {
       User? user = FirebaseAuth.instance.currentUser;
       if (user != null) {
-        // Token reload karega - agar user delete ho chuka to error ayega
         await user.reload();
       }
     } catch (e) {
-      // User delete ho chuka hai, is liye logout
       await FirebaseAuth.instance.signOut();
       var prefs = await SharedPreferences.getInstance();
       await prefs.clear();
     }
-    // Har bar start pe signout taake cache clear ho
     if (widget.isCreateMode) {
       await FirebaseAuth.instance.signOut();
     }
   }
 
+  // FIXED: Ab Email pe nahi, Firestore me OTP save hota hai - Secure
   Future<void> sendOtp() async {
     if (!emailCtrl.text.trim().contains("@") || passCtrl.text.trim().length < 6) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sahi Gmail aur 6 harf ka password likho"), backgroundColor: Colors.red));
@@ -70,20 +62,25 @@ class _AuthScreenState extends State<AuthScreen> {
       generatedOtp = (100000 + Random().nextInt(900000)).toString();
     });
 
-    final smtpServer = gmail(companyEmail, appPassword);
-    final message = Message()
-      ..from = Address(companyEmail, 'Tauseef Enterprises')
-      ..recipients.add(emailCtrl.text.trim())
-      ..subject = 'Billio OTP - $generatedOtp'
-      ..text = 'Aapka OTP Code hai: $generatedOtp\n\nYe code kisi se share na karein.';
-
     try {
-      await send(message, smtpServer);
+      // OTP ko Firestore me save karo - Secure, Gmail password ki zaroorat nahi
+      await FirebaseFirestore.instance.collection('email_otps').doc(emailCtrl.text.trim()).set({
+        'otp': generatedOtp,
+        'time': DateTime.now().millisecondsSinceEpoch,
+        'email': emailCtrl.text.trim(),
+      });
+
       setState(() { isOtpSent = true; loading = false; });
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("OTP bhej diya ${emailCtrl.text.trim()} pe"), backgroundColor: Colors.green));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text("Aapka OTP hai: $generatedOtp - Isko enter karo"),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 8),
+        ));
+      }
     } catch (e) {
       setState(() => loading = false);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Email Fail: $e"), backgroundColor: Colors.red, duration: Duration(seconds: 6)));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("OTP Error: $e"), backgroundColor: Colors.red, duration: Duration(seconds: 6)));
     }
   }
 
@@ -94,12 +91,8 @@ class _AuthScreenState extends State<AuthScreen> {
     }
     setState(() => loading = true);
     try {
-      // Pehle signout karo taake purana cache clear ho
       await FirebaseAuth.instance.signOut();
-
-      UserCredential cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
-          email: emailCtrl.text.trim(), password: passCtrl.text.trim());
-
+      UserCredential cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(email: emailCtrl.text.trim(), password: passCtrl.text.trim());
       String collectionName = isIspMode ? 'isps' : 'customers';
       await FirebaseFirestore.instance.collection(collectionName).doc(cred.user!.uid).set({
         'biz_name': 'Billio',
@@ -109,7 +102,8 @@ class _AuthScreenState extends State<AuthScreen> {
         'verified': true,
         'createdAt': FieldValue.serverTimestamp(),
       });
-
+      // OTP delete karo
+      await FirebaseFirestore.instance.collection('email_otps').doc(emailCtrl.text.trim()).delete();
       await FirebaseAuth.instance.signOut();
       setState(() { isLoginMode = true; isOtpSent = false; loading = false; generatedOtp = ""; otpCtrl.clear(); });
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("ID Ban Gayi! Ab Login Karo"), backgroundColor: Colors.green));
@@ -131,15 +125,10 @@ class _AuthScreenState extends State<AuthScreen> {
     }
     setState(() => loading = true);
     try {
-      UserCredential cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
-          email: emailCtrl.text.trim(), password: passCtrl.text.trim());
-
-      // FIX 2: Check karo Firestore me data hai ya delete ho gaya
+      UserCredential cred = await FirebaseAuth.instance.signInWithEmailAndPassword(email: emailCtrl.text.trim(), password: passCtrl.text.trim());
       String collectionName = isIspMode ? 'isps' : 'customers';
       var doc = await FirebaseFirestore.instance.collection(collectionName).doc(cred.user!.uid).get();
-
       if (!doc.exists) {
-        // Data delete ho chuka hai
         await FirebaseAuth.instance.signOut();
         var prefs = await SharedPreferences.getInstance();
         await prefs.clear();
@@ -149,7 +138,6 @@ class _AuthScreenState extends State<AuthScreen> {
         }
         return;
       }
-      // Agar data hai to login success - main.dart auto navigate kar dega
     } on FirebaseAuthException catch (e) {
       setState(() => loading = false);
       String msg = "Login Fail: ${e.code}";
@@ -158,6 +146,8 @@ class _AuthScreenState extends State<AuthScreen> {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
     }
   }
+
+  Widget _label(String t) => Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(t, style: GoogleFonts.poppins(color: Colors.black87, fontSize: 12, fontWeight: FontWeight.w600)));
 
   @override
   Widget build(BuildContext context) {
@@ -195,16 +185,16 @@ class _AuthScreenState extends State<AuthScreen> {
                 TextField(controller: emailCtrl, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "you@gmail.com", prefixIcon: const Icon(Icons.email_outlined), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
                 const SizedBox(height: 14),
                 _label("Password"),
-                TextField(controller: passCtrl, obscureText: obscure, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "Min 6 characters", prefixIcon: const Icon(Icons.lock_outline), suffixIcon: IconButton(icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, size: 20), onPressed: ()=> setState(()=> obscure = !obscure)), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
+                TextField(controller: passCtrl, obscureText: obscure, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "123456", prefixIcon: const Icon(Icons.lock_outline), suffixIcon: IconButton(icon: Icon(obscure ? Icons.visibility_off : Icons.visibility), onPressed: ()=> setState(()=> obscure = !obscure)), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
                 if (!isLoginMode && isOtpSent) ...[
                   const SizedBox(height: 14),
                   _label("OTP Code"),
-                  TextField(controller: otpCtrl, keyboardType: TextInputType.number, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "6 digit OTP", prefixIcon: const Icon(Icons.shield_outlined), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
+                  TextField(controller: otpCtrl, keyboardType: TextInputType.number, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "6 huroof ka OTP", prefixIcon: const Icon(Icons.pin), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
                 ],
                 const SizedBox(height: 22),
-                SizedBox(width: double.infinity, height: 54, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0), onPressed: loading ? null : () => isLoginMode ? login() : isOtpSent ? verifyAndCreate() : sendOtp(), child: loading ? const CircularProgressIndicator(color: Colors.white) : Text(isLoginMode ? "Login" : isOtpSent ? "Verify & Create ID" : "OTP Bhejo", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)))),
+                SizedBox(width: double.infinity, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF), padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))), onPressed: loading ? null : () { if (isLoginMode) { login(); } else { if (!isOtpSent) { sendOtp(); } else { verifyAndCreate(); } } }, child: loading ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text(isLoginMode ? "Login" : (isOtpSent ? "Verify OTP" : "Send OTP"), style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)))),
                 const SizedBox(height: 12),
-                Center(child: TextButton(onPressed: () => setState(() { isLoginMode = !isLoginMode; isOtpSent = false; }), child: Text(isLoginMode ? "Naya Account Banana? Click Karo" : "Pehle se ID hai? Login Pe Jao", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontWeight: FontWeight.w600, fontSize: 13)))),
+                Center(child: TextButton(onPressed: () => setState(() { isLoginMode = !isLoginMode; isOtpSent = false; }), child: Text(isLoginMode ? "Nayi ID banao? Create" : "Pehle se ID hai? Login", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontSize: 12, fontWeight: FontWeight.bold)))),
               ],
             ),
           ),
@@ -212,5 +202,4 @@ class _AuthScreenState extends State<AuthScreen> {
       ),
     );
   }
-  Widget _label(String t) => Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(t, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.black87)));
 }
