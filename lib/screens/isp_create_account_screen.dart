@@ -4,8 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:mailer/mailer.dart';
-import 'package:mailer/smtp_server.dart';
 
 class IspCreateAccountScreen extends StatefulWidget {
   const IspCreateAccountScreen({super.key});
@@ -25,9 +23,6 @@ class _IspCreateAccountScreenState extends State<IspCreateAccountScreen> {
   final passCtrl = TextEditingController();
   final confirmPassCtrl = TextEditingController();
   final otpCtrl = TextEditingController();
-
-  final String companyEmail = "tauseefent8@gmail.com";
-  final String appPassword = "enkwgxaohmygrnil";
 
   Timer? _timer;
   int _seconds = 0;
@@ -52,16 +47,19 @@ class _IspCreateAccountScreenState extends State<IspCreateAccountScreen> {
     }
     setState(() { loading = true; generatedOtp = (100000 + Random().nextInt(900000)).toString(); });
 
-    final smtpServer = gmail(companyEmail, appPassword);
-    final message = Message()..from = Address(companyEmail, 'Tauseef Enterprises')..recipients.add(emailCtrl.text.trim())..subject = 'ISP OTP Code - $generatedOtp'..text = 'Aapka ISP OTP Code hai: $generatedOtp';
     try {
-      await send(message, smtpServer);
+      // FIXED: Ab Firestore me OTP save hota hai, Gmail password nahi chahiye
+      await FirebaseFirestore.instance.collection('email_otps').doc(emailCtrl.text.trim()).set({
+        'otp': generatedOtp,
+        'time': DateTime.now().millisecondsSinceEpoch,
+        'email': emailCtrl.text.trim(),
+      });
       setState(() { isOtpSent = true; loading = false; });
       startTimer();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isResend ? "OTP Dobara Bhej Diya!" : "OTP bhej diya ${emailCtrl.text.trim()} pe")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isResend ? "OTP Dobara: $generatedOtp" : "Aapka OTP hai: $generatedOtp"), backgroundColor: Colors.green, duration: Duration(seconds: 8)));
     } catch (e) {
       setState(() => loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Email Fail: $e")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("OTP Error: $e"), backgroundColor: Colors.red));
     }
   }
 
@@ -94,6 +92,7 @@ class _IspCreateAccountScreenState extends State<IspCreateAccountScreen> {
         'verified': true,
         'createdAt': FieldValue.serverTimestamp(),
       });
+      await FirebaseFirestore.instance.collection('email_otps').doc(emailCtrl.text.trim()).delete();
       await FirebaseAuth.instance.signOut();
       setState(() => loading = false);
       if (mounted) {
@@ -118,43 +117,32 @@ class _IspCreateAccountScreenState extends State<IspCreateAccountScreen> {
           padding: const EdgeInsets.all(20),
           child: Container(
             width: 420,
-            padding: const EdgeInsets.all(26),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(28)),
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Center(child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(border: Border.all(color: const Color(0xFF7C4DFF), width: 2), borderRadius: BorderRadius.circular(14)), child: const Icon(Icons.wifi, color: Color(0xFF7C4DFF))),
-                  const SizedBox(width: 10),
-                  Text("Billio - ISP Only", style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black87)),
-                ])),
-                const SizedBox(height: 14),
-                Center(child: Text(isOtpVerified ? "Create Password" : isOtpSent ? "Verify OTP" : "Create ISP Account", style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black))),
-                Center(child: Text(isOtpVerified ? "Ab apna password banao" : isOtpSent ? "Email pe OTP bheja gaya hai" : "Sirf ISP ke liye - OTP se Verify hogi", style: GoogleFonts.poppins(fontSize: 12, color: Colors.black54))),
-                const SizedBox(height: 24),
-                _label("ISP Gmail ID"),
-                TextField(controller: emailCtrl, enabled: !isOtpSent, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "you@gmail.com", prefixIcon: const Icon(Icons.email_outlined), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
-                if (isOtpSent && !isOtpVerified) ...[
-                  const SizedBox(height: 14),
-                  _label("OTP Code"),
-                  TextField(controller: otpCtrl, keyboardType: TextInputType.number, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "6 digit OTP", prefixIcon: const Icon(Icons.shield_outlined), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
+                Text("Create ISP Account", style: GoogleFonts.poppins(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
+                SizedBox(height: 16),
+                TextField(controller: emailCtrl, style: TextStyle(color: Colors.black), decoration: InputDecoration(labelText: "Gmail", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
+                SizedBox(height: 12),
+                if(isOtpSent)...[
+                  TextField(controller: otpCtrl, style: TextStyle(color: Colors.black), decoration: InputDecoration(labelText: "OTP Enter Karo", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
+                  SizedBox(height: 8),
+                  Row(children: [
+                    ElevatedButton(onPressed: verifyOtp, style: ElevatedButton.styleFrom(backgroundColor: Colors.green), child: Text("Verify OTP", style: TextStyle(color: Colors.white))),
+                    SizedBox(width: 10),
+                    if(canResend) TextButton(onPressed: ()=> sendOtp(isResend: true), child: Text("Resend OTP")) else Text("Resend in $_seconds sec", style: TextStyle(fontSize: 12)),
+                  ]),
                 ],
-                if (isOtpVerified) ...[
-                  const SizedBox(height: 14),
-                  _label("Create Password"),
-                  TextField(controller: passCtrl, obscureText: obscure, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "Min 6 characters", prefixIcon: const Icon(Icons.lock_outline), suffixIcon: IconButton(icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, size: 20), onPressed: ()=> setState(()=> obscure = !obscure)), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
-                  const SizedBox(height: 14),
-                  _label("Confirm Password"),
-                  TextField(controller: confirmPassCtrl, obscureText: obscure2, style: const TextStyle(color: Colors.black), decoration: InputDecoration(hintText: "Password dobara likho", prefixIcon: const Icon(Icons.lock_outline), suffixIcon: IconButton(icon: Icon(obscure2 ? Icons.visibility_off : Icons.visibility, size: 20), onPressed: ()=> setState(()=> obscure2 = !obscure2)), filled: true, fillColor: const Color(0xFFF3F4F6), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none))),
+                SizedBox(height: 12),
+                if(isOtpVerified || !isOtpSent)...[
+                  TextField(controller: passCtrl, obscureText: obscure, style: TextStyle(color: Colors.black), decoration: InputDecoration(labelText: "Password", suffixIcon: IconButton(icon: Icon(obscure? Icons.visibility_off : Icons.visibility), onPressed: ()=> setState(()=> obscure=!obscure)), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
+                  SizedBox(height: 12),
+                  TextField(controller: confirmPassCtrl, obscureText: obscure2, style: TextStyle(color: Colors.black), decoration: InputDecoration(labelText: "Confirm Password", suffixIcon: IconButton(icon: Icon(obscure2? Icons.visibility_off : Icons.visibility), onPressed: ()=> setState(()=> obscure2=!obscure2)), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
                 ],
-                const SizedBox(height: 22),
-                SizedBox(width: double.infinity, height: 54, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C4DFF), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), elevation: 0), onPressed: loading ? null : () { if (!isOtpSent) { sendOtp(); } else if (!isOtpVerified) { verifyOtp(); } else { createAccount(); } }, child: loading ? const CircularProgressIndicator(color: Colors.white) : Text(!isOtpSent ? "OTP Bhejo" : !isOtpVerified ? "Verify OTP" : "Create Account", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)))),
-                if (isOtpSent && !isOtpVerified) ...[
-                  const SizedBox(height: 12),
-                  Center(child: canResend ? TextButton(onPressed: loading ? null : () => sendOtp(isResend: true), child: Text("Resend OTP", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontWeight: FontWeight.bold, fontSize: 13))) : Text("Resend OTP in $_seconds sec", style: GoogleFonts.poppins(color: Colors.black54, fontSize: 13))),
-                ],
-                const SizedBox(height: 8),
-                Center(child: TextButton(onPressed: () => Navigator.pop(context), child: RichText(text: TextSpan(text: "Already have account? ", style: GoogleFonts.poppins(color: Colors.black54, fontSize: 13), children: [TextSpan(text: "Login", style: GoogleFonts.poppins(color: const Color(0xFF7C4DFF), fontWeight: FontWeight.bold, fontSize: 13))])))),
+                SizedBox(height: 20),
+                SizedBox(width: double.infinity, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF7C4DFF), padding: EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), onPressed: loading? null : (){ if(!isOtpSent){ sendOtp(); } else if(!isOtpVerified){ verifyOtp(); } else { createAccount(); } }, child: loading? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text(isOtpSent? (isOtpVerified? "Create Account" : "Verify OTP") : "Send OTP", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)))),
               ],
             ),
           ),
@@ -162,5 +150,4 @@ class _IspCreateAccountScreenState extends State<IspCreateAccountScreen> {
       ),
     );
   }
-  Widget _label(String t) => Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(t, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.black87)));
 }
