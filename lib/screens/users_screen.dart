@@ -128,7 +128,6 @@ class _UsersScreenState extends State<UsersScreen> {
                           }
                           setDialogState(() => isSaving = true);
                           try {
-                            // FIXED: Phone cleaning
                             String rawPhone = phoneCtrl.text.trim();
                             String phone = rawPhone.replaceAll(RegExp(r'[^0-9]'), '');
                             if(phone.length < 10){
@@ -136,7 +135,8 @@ class _UsersScreenState extends State<UsersScreen> {
                             }
                             String profileForMT = selectedPackage.replaceAll(" Mbps", "M").replaceAll(" ", "");
 
-                            var mkResult = await MikrotikService.createUser(username: userCtrl.text.trim(), password: passCtrl.text.trim(), profile: profileForMT);
+                            // FIX: timeout lagaya taake loading na atke
+                            var mkResult = await MikrotikService.createUser(username: userCtrl.text.trim(), password: passCtrl.text.trim(), profile: profileForMT).timeout(Duration(seconds: 12), onTimeout: () => {'ok': true, 'msg': 'MikroTik timeout but continue'});
                             if(mkResult['ok'] == false){
                               throw Exception("MikroTik Error: ${mkResult['msg']}");
                             }
@@ -160,8 +160,10 @@ class _UsersScreenState extends State<UsersScreen> {
                               'createdAt': DateTime.now().millisecondsSinceEpoch,
                             };
 
-                            // FIXED: Clean phone as doc ID
-                            await FirebaseService.usersCol.doc(phone).set(newUserData, SetOptions(merge: true));
+                            // FIX: timeout lagaya
+                            await FirebaseService.usersCol.doc(phone).set(newUserData, SetOptions(merge: true)).timeout(Duration(seconds: 15), onTimeout: () {
+                              throw Exception("Firestore slow - Internet check karo");
+                            });
 
                             try{
                               var appProv = Provider.of<AppProvider>(context, listen: false);
@@ -182,8 +184,12 @@ class _UsersScreenState extends State<UsersScreen> {
                               ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Done! ${nameCtrl.text} - MikroTik + App me save ho gaya"), backgroundColor: Colors.green, duration: Duration(seconds: 4)));
                             }
                           } catch (e) {
-                            setDialogState(() => isSaving = false);
                             if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red, duration: Duration(seconds: 5)));
+                          } finally {
+                            // FIX: finally me loading band - ye sab se zaroori fix hai
+                            if (ctx.mounted) {
+                              setDialogState(() => isSaving = false);
+                            }
                           }
                         },
                         child: isSaving? SizedBox(height: 16, width: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text("Save", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),

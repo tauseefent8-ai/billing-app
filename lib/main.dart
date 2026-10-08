@@ -48,37 +48,28 @@ class MyApp extends StatelessWidget {
 class AuthWrapper extends StatelessWidget {
   const AuthWrapper({super.key});
 
-  // FIXED PART 2: Pehle 1000 queries lagti thi, ab sirf 2 queries lagegi - Collection Group Query
   Future<bool> isCustomer(String email, String phone) async {
     try{
       if(email.isEmpty && phone.isEmpty) return false;
-      
-      // Direct collectionGroup search - fast & cheap
       if(email.isNotEmpty){
-        var snap = await FirebaseFirestore.instance.collectionGroup('my_users').where('email', isEqualTo: email).limit(1).get();
+        var snap = await FirebaseFirestore.instance.collectionGroup('my_users').where('email', isEqualTo: email).limit(1).get().timeout(Duration(seconds: 7));
         if(snap.docs.isNotEmpty) return true;
       }
       if(phone.isNotEmpty){
-        // Phone ko clean karke search karo
         String cleanPhone = phone.replaceAll(RegExp(r'[^0-9]'), '');
-        var snap2 = await FirebaseFirestore.instance.collectionGroup('my_users').where('phone', isEqualTo: phone).limit(1).get();
-        if(snap2.docs.isNotEmpty) return true;
-        // Clean phone se bhi check
-        if(cleanPhone != phone){
-          var snap3 = await FirebaseFirestore.instance.collectionGroup('my_users').where('phone', isEqualTo: cleanPhone).limit(1).get();
-          if(snap3.docs.isNotEmpty) return true;
+        try{
+          var snap2 = await FirebaseFirestore.instance.collectionGroup('my_users').where('phone', isEqualTo: phone).limit(1).get().timeout(Duration(seconds: 7));
+          if(snap2.docs.isNotEmpty) return true;
+          if(cleanPhone!= phone){
+            var snap3 = await FirebaseFirestore.instance.collectionGroup('my_users').where('phone', isEqualTo: cleanPhone).limit(1).get().timeout(Duration(seconds: 7));
+            if(snap3.docs.isNotEmpty) return true;
+          }
+        }catch(e){
+          // ignore timeout
         }
       }
     }catch(e){
-      debugPrint("isCustomer error: $e - Firestore Index chahiye hoga collectionGroup ke liye");
-      // Fallback purana tareeqa agar index na bana ho to
-      try{
-        var isps = await FirebaseFirestore.instance.collection('isps').limit(20).get();
-        for(var ispDoc in isps.docs){
-          var snap = await ispDoc.reference.collection('my_users').where('email', isEqualTo: email).limit(1).get();
-          if(snap.docs.isNotEmpty) return true;
-        }
-      }catch(e2){}
+      debugPrint("isCustomer error: $e");
     }
     return false;
   }
@@ -90,6 +81,15 @@ class AuthWrapper extends StatelessWidget {
       if(snap.hasData){
         String email = snap.data?.email?? "";
         String phone = snap.data?.phoneNumber?? "";
+        // FIX: Nayi ID login hote hi agar data khali hai to reload karo
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          try{
+            var prov = Provider.of<AppProvider>(context, listen: false);
+            if(prov.users.isEmpty &&!prov.isLoading){
+              prov.initAll();
+            }
+          }catch(_){}
+        });
         return FutureBuilder<bool>(future: isCustomer(email, phone), builder: (context, roleSnap){
           if(roleSnap.connectionState==ConnectionState.waiting){ return const Scaffold(body: Center(child: CircularProgressIndicator(color: Color(0xFF7C4DFF)))); }
           if(roleSnap.data==true){ return const CustomerDashboard(); }
@@ -117,16 +117,28 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   late AnimationController _controller; late Animation<double> _fadeAnim;
 
   @override
-  void initState(){ super.initState(); _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 250)); _fadeAnim = CurvedAnimation(parent: _controller, curve: Curves.easeOut); _controller.forward(); _loadBizInfo(); }
+  void initState(){
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 250));
+    _fadeAnim = CurvedAnimation(parent: _controller, curve: Curves.easeOut);
+    _controller.forward();
+    _loadBizInfo();
+    // FIX: Har login pe fresh data load karo - ID switch wala bug khatam
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if(mounted){
+        Provider.of<AppProvider>(context, listen: false).initAll();
+      }
+    });
+  }
   @override
   void dispose(){ _controller.dispose(); super.dispose(); }
 
   _loadBizInfo() async {
     final p = await SharedPreferences.getInstance();
     String? savedPic = p.getString('profile_pic_$uid');
-    String savedName = p.getString('biz_name_$uid') ?? p.getString('biz_name') ?? "ISP PENNEL";
+    String savedName = p.getString('biz_name_$uid')?? p.getString('biz_name')?? "ISP PENNEL";
     bool exists = false;
-    if(savedPic != null && !kIsWeb){
+    if(savedPic!= null &&!kIsWeb){
       try{ exists = File(savedPic).existsSync(); }catch(e){ exists = false; }
     }
     try{ if(uid.isNotEmpty){ var doc = await _firestore.collection('isps').doc(uid).get(); if(doc.exists){ String fbName = doc.data()?['biz_name']?? doc.data()?['companyName']?? ""; if(fbName.isNotEmpty) savedName = fbName; } } }catch(e){}
@@ -170,7 +182,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         IconButton(icon: Icon(Icons.refresh, color: Colors.white70), onPressed: ()=> provider.initAll()),
       ]),
       drawer: Drawer(backgroundColor: const Color(0xFF1E1E1E), child: ListView(padding: EdgeInsets.zero, children: [
-        UserAccountsDrawerHeader(decoration: BoxDecoration(color: Color(0xFF7C4DFF)), currentAccountPicture: GestureDetector(onTap: pickProfilePic, child: CircleAvatar(backgroundColor: Colors.white, backgroundImage: profilePicPath!=null && picExists && !kIsWeb ? FileImage(File(profilePicPath!)) : null, child: profilePicPath==null || !picExists ? Icon(Icons.person, size: 40, color: Color(0xFF7C4DFF)) : null)), accountName: GestureDetector(onTap: _editCompanyName, child: Row(children: [Flexible(child: Text(bizName, style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16), overflow: TextOverflow.ellipsis)), SizedBox(width: 6), Icon(Icons.edit, size: 14, color: Colors.white70)])), accountEmail: Text(FirebaseAuth.instance.currentUser?.email?? "No Email", style: GoogleFonts.poppins(fontSize: 12))),
+        UserAccountsDrawerHeader(decoration: BoxDecoration(color: Color(0xFF7C4DFF)), currentAccountPicture: GestureDetector(onTap: pickProfilePic, child: CircleAvatar(backgroundColor: Colors.white, backgroundImage: profilePicPath!=null && picExists &&!kIsWeb? FileImage(File(profilePicPath!)) : null, child: profilePicPath==null ||!picExists? Icon(Icons.person, size: 40, color: Color(0xFF7C4DFF)) : null)), accountName: GestureDetector(onTap: _editCompanyName, child: Row(children: [Flexible(child: Text(bizName, style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16), overflow: TextOverflow.ellipsis)), SizedBox(width: 6), Icon(Icons.edit, size: 14, color: Colors.white70)])), accountEmail: Text(FirebaseAuth.instance.currentUser?.email?? "No Email", style: GoogleFonts.poppins(fontSize: 12))),
         ListTile(leading: Icon(Icons.dashboard, color: Colors.white70), title: Text("Dashboard", style: GoogleFonts.poppins(color: Colors.white)), onTap: (){ setState(()=> selectedIndex=0); Navigator.pop(context); }),
         ListTile(leading: Icon(Icons.receipt, color: Colors.white70), title: Text("Bills", style: GoogleFonts.poppins(color: Colors.white)), onTap: (){ setState(()=> selectedIndex=1); Navigator.pop(context); }),
         ListTile(leading: Icon(Icons.people, color: Colors.white70), title: Text("Customers", style: GoogleFonts.poppins(color: Colors.white)), onTap: (){ setState(()=> selectedIndex=2); Navigator.pop(context); }),

@@ -5,7 +5,10 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'mikrotik_setting_screen.dart'; // <-- YE ADD KIYA HAI
+import 'mikrotik_setting_screen.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_provider.dart';
+import '../services/offline_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -126,6 +129,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if(confirm!=true) return;
 
+    bool dialogOpen = true;
     showDialog(
         context: context,
         barrierDismissible: false,
@@ -156,16 +160,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'companyName': bizName,
           'lastLogout': FieldValue.serverTimestamp(),
           'lastUpdated': FieldValue.serverTimestamp(),
-        }, SetOptions(merge:true));
+        }, SetOptions(merge:true)).timeout(Duration(seconds: 8), onTimeout: () {
+          throw Exception("Save timeout - continue logout");
+        });
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('biz_name', bizName.isEmpty? "ISP PENNEL" : bizName);
       }
-      await Future.delayed(const Duration(seconds: 3));
-      if(mounted) Navigator.pop(context);
-      await FirebaseAuth.instance.signOut();
+      await Future.delayed(const Duration(seconds: 1));
     } catch(e){
-      if(mounted) Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Logout Error: $e'), backgroundColor: Colors.red));
+      debugPrint("Logout save error (ignored): $e");
+    } finally {
+      if(dialogOpen && mounted){
+        try{ Navigator.pop(context); dialogOpen = false; } catch(_){}
+      }
+      try{
+        await OfflineService.clearAll().timeout(Duration(seconds: 3));
+      }catch(_){}
+      try{
+        if(mounted){
+          var prov = Provider.of<AppProvider>(context, listen: false);
+          prov.users = [];
+          prov.bills = [];
+          prov.collections = [];
+          prov.currentPage = 0;
+          prov.notifyListeners();
+        }
+      }catch(_){}
+      try{
+        await FirebaseAuth.instance.signOut().timeout(Duration(seconds: 5), onTimeout: (){});
+      } catch(e){
+        try{ await FirebaseAuth.instance.signOut(); } catch(_){}
+      }
+      // FIX: Yahan se Navigator push hata diya hai - AuthWrapper khud login pe le jayega
     }
   }
 
@@ -177,14 +203,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
-          // === YAHAN MIKROTIK KA BUTTON ADD KIYA HAI ===
           _buildTitle("NETWORKING"),
           _buildTile(Icons.router, "Mikrotik Control", "Router se users add / active / disable karo", (){
             Navigator.push(context, MaterialPageRoute(builder: (_) => const MikrotikSettingScreen()));
           }, color: Colors.orange),
           const Divider(color: Colors.white12),
-          // === END ===
-
           _buildTitle("BUSINESS"),
           _buildTile(Icons.store, "Business Info", bizName.isEmpty? "ISP PENNEL" : bizName, _showBusinessDialog),
           _buildTile(Icons.attach_money, "Package Cost (Kharid Rate)", "Profit sahi nikalne ke liye", _showCostDialog, color: Colors.green),
