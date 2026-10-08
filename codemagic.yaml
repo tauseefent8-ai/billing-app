@@ -1,1 +1,26 @@
-null
+workflows:
+  ios-free-ipa:
+    name: iOS Free IPA No Signing
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Get packages
+        script: flutter pub get
+      - name: Pod install
+        script: |
+          cd ios && pod install --repo-update && cd ..
+      - name: Build iOS without code signing
+        script: |
+          flutter build ios --release --no-codesign
+          mkdir -p build/ios/ipa
+          cd build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -r ../ipa/billing-app-free.ipa Payload
+          cd ../../..
+    artifacts:
+      - build/ios/ipa/*.ipa
