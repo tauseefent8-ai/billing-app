@@ -86,6 +86,26 @@ class AppProvider extends ChangeNotifier {
     }
   }
 
+  // NEW: Update user local - Edit ke liye
+  void updateUserLocal(Map<String,dynamic> updatedData){
+    try{
+      String phone = updatedData['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '');
+      if(phone.isNotEmpty){
+        updatedData['phone'] = phone;
+      }
+      int index = users.indexWhere((u) => u['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '') == phone);
+      if(index!= -1){
+        users[index] = {...users[index],...updatedData};
+      }else{
+        users.insert(0, updatedData);
+      }
+      OfflineService.saveAll(users, bills, collections);
+      notifyListeners();
+    }catch(e){
+      debugPrint("updateUserLocal error: $e");
+    }
+  }
+
   Future<void> removeUserLocal(String phone) async {
     String cleanPhone = phone.replaceAll(RegExp(r'[^0-9]'), '');
     users.removeWhere((u) => u['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '') == cleanPhone || u['phone'].toString() == phone);

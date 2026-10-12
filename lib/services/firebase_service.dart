@@ -4,57 +4,82 @@ import 'package:flutter/foundation.dart';
 
 class FirebaseService {
   static final _firestore = FirebaseFirestore.instance;
-  static String get uid => FirebaseAuth.instance.currentUser?.uid?? "";
+  static const String _fallbackId = "kPaksjGOLLROhyCHmDGgSIGizCf1";
+
+  static String get uid {
+    String authUid = FirebaseAuth.instance.currentUser?.uid?? "";
+    if (authUid.isNotEmpty) return authUid;
+    debugPrint("⚠️ Auth NULL hai, fallback ID use ho raha: $_fallbackId");
+    return _fallbackId;
+  }
 
   static bool get isUidValid => uid.isNotEmpty;
 
-  static CollectionReference get usersCol {
-    if(!isUidValid) throw Exception("User not logged in - uid empty");
-    return _firestore.collection('isps').doc(uid).collection('my_users');
-  }
-  static CollectionReference get billsCol {
-    if(!isUidValid) throw Exception("User not logged in - uid empty");
-    return _firestore.collection('isps').doc(uid).collection('my_bills');
-  }
-  static CollectionReference get collectionsCol {
-    if(!isUidValid) throw Exception("User not logged in - uid empty");
-    return _firestore.collection('isps').doc(uid).collection('my_collections');
+  static DocumentReference get ispDoc {
+    return _firestore.collection('isps').doc(uid);
   }
 
-  static Future<void> updateUserDue(String phone, double newDue) async {
-    if(!isUidValid) return;
-    if(phone.trim().isEmpty) return;
-    String cleanPhone = phone.replaceAll(RegExp(r'[^0-9]'), '');
-    String docId = cleanPhone.isNotEmpty ? cleanPhone : phone.trim();
-    try{
-      await usersCol.doc(docId).set({'pendingDue': newDue}, SetOptions(merge: true));
-    }catch(e){
-      debugPrint("updateUserDue error: $e");
+  static CollectionReference get usersCol {
+    return ispDoc.collection('my_users');
+  }
+  static CollectionReference get billsCol {
+    return ispDoc.collection('my_bills');
+  }
+  static CollectionReference get collectionsCol {
+    return ispDoc.collection('my_collections');
+  }
+  static CollectionReference get expensesCol {
+    return ispDoc.collection('my_expenses');
+  }
+
+  static Future<void> ensureIspDoc() async {
+    try {
+      debugPrint("=== ENSURE ISP DOC: isps/$uid ===");
+      await ispDoc.set({
+        'biz_name': 'MK-Fiber',
+        'companyName': 'MK-Fiber',
+        'email': FirebaseAuth.instance.currentUser?.email?? 'et1styear786@gmail.com',
+        'createdAt': FieldValue.serverTimestamp(),
+        'lastActive': FieldValue.serverTimestamp(),
+        'verified': true,
+      }, SetOptions(merge: true));
+      debugPrint("✅ ISP DOC ENSURED");
+    } catch (e) {
+      debugPrint("❌ ensureIspDoc error: $e");
+      rethrow;
     }
   }
 
-  static int parseAmount(dynamic v){
-    if(v==null) return 0;
-    if(v is int) return v;
-    if(v is double) return v.toInt();
-    if(v is num) return v.toInt();
+  static Future<void> updateUserDue(String phone, double newDue) async {
+    if (phone.trim().isEmpty) return;
+    try {
+      String cleanPhone = phone.replaceAll(RegExp(r'[^0-9]'), '');
+      String docId = cleanPhone.isNotEmpty? cleanPhone : phone.trim();
+      await usersCol.doc(docId).set({'pendingDue': newDue}, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint("Due error: $e");
+    }
+  }
+
+  static int parseAmount(dynamic v) {
+    if (v == null) return 0;
+    if (v is int) return v;
+    if (v is double) return v.toInt();
+    if (v is num) return v.toInt();
     String s = v.toString().replaceAll(RegExp(r'[^0-9]'), '');
-    return int.tryParse(s) ?? int.tryParse(v.toString()) ?? 0;
+    return int.tryParse(s)?? 0;
   }
 
   static String genBillId(String phone, String month) {
     String cleanPhone = phone.replaceAll(RegExp(r'[^0-9]'), '');
-    // UUID jaisa unique ID - timestamp + random
-    return "${cleanPhone}_${month}_${DateTime.now().millisecondsSinceEpoch}_${DateTime.now().microsecondsSinceEpoch}";
+    return "${cleanPhone}_${month}_${DateTime.now().millisecondsSinceEpoch}";
   }
 
-  // Batch write helper for bills
-  static Future<void> batchWriteBills(List<Map<String,dynamic>> bills) async {
-    if(!isUidValid) return;
-    if(bills.isEmpty) return;
+  static Future<void> batchWriteBills(List<Map<String, dynamic>> bills) async {
+    if (bills.isEmpty) return;
     WriteBatch batch = _firestore.batch();
-    for(var bill in bills){
-      if(bill['id'] == null) continue;
+    for (var bill in bills) {
+      if (bill['id'] == null) continue;
       batch.set(billsCol.doc(bill['id'].toString()), bill, SetOptions(merge: true));
     }
     await batch.commit();

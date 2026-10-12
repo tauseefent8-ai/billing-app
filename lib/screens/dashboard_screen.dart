@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/firebase_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   final List<dynamic> bills;
@@ -20,9 +21,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   @override
   void initState(){
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 250)); // POINT 2 FIX - pehle 1200 tha
-    _fadeAnim = CurvedAnimation(parent: _controller, curve: Curves.easeOut); // POINT 2 FIX - pehle easeIn tha
-    _slideAnim = Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut)); // POINT 2 FIX - pehle 0.3 tha
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 250));
+    _fadeAnim = CurvedAnimation(parent: _controller, curve: Curves.easeOut);
+    _slideAnim = Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
     _controller.forward();
   }
   @override
@@ -40,8 +41,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   List<dynamic> get filteredBills {
     return widget.bills.where((b) {
       try {
-        if (b['date']!= null) { DateTime d = DateTime.parse(b['date'].toString()); return d.year == selectedMonth.year && d.month == selectedMonth.month; }
         if (b['billMonth']!= null) return b['billMonth'].toString() == "${selectedMonth.year}-${selectedMonth.month}";
+        if (b['date']!= null) { DateTime d = DateTime.parse(b['date'].toString()); return d.year == selectedMonth.year && d.month == selectedMonth.month; }
         return true;
       } catch (e) { return true; }
     }).toList();
@@ -50,25 +51,68 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   List<dynamic> get filteredCollections {
     return widget.collections.where((c) {
       try {
-        if (c['date']!= null) { DateTime d = DateTime.parse(c['date'].toString()); return d.year == selectedMonth.year && d.month == selectedMonth.month; }
         if (c['billMonth']!= null) return c['billMonth'].toString() == "${selectedMonth.year}-${selectedMonth.month}";
+        if (c['date']!= null) { DateTime d = DateTime.parse(c['date'].toString()); return d.year == selectedMonth.year && d.month == selectedMonth.month; }
         return true;
       } catch (e) { return true; }
     }).toList();
   }
 
+  bool _isActiveWithoutPayBill(Map<String, dynamic> b){
+    String pt = (b['paymentType']?.toString()?? '').toLowerCase();
+    String status = (b['status']?.toString()?? '').toLowerCase();
+    if(pt.contains('without pay') || status.contains('without_pay') || status.contains('active_without')) return true;
+    if(b['isPartial']==true) return false;
+    if(b['isPaid']==true) return false;
+    if(b['activeWithoutPay']==true || b['isActiveWithoutPay']==true) return true;
+    return false;
+  }
+
+  bool _isBillCollection(Map<String, dynamic> c){
+    if(c['billId']!=null) return true;
+    String type = (c['type']?.toString()?? '').toLowerCase();
+    if(type.contains('bill')) return true;
+    if(c['dueAmount']!=null || c['monthlyAmount']!=null) return true;
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
-    double pendingAmount = 0; int pendingUsers = 0;
-    for (var b in filteredBills) { if (b['isPaid']!= true) { pendingAmount += (b['amount'] as num).toDouble(); pendingUsers++; } }
-    double totalCollection = 0;
-    for (var c in filteredCollections) { totalCollection += (c['amount'] as num).toDouble(); }
-    int paidUsers = filteredCollections.length;
+    double totalCollectionFromBills = 0;
+    List<dynamic> billCollectionsOnly = [];
+    for(var c in filteredCollections){
+      if(_isBillCollection(c)){
+        totalCollectionFromBills += FirebaseService.parseAmount(c['amount']).toDouble();
+        billCollectionsOnly.add(c);
+      }
+    }
+
+    List<dynamic> activeWithoutPayBills = filteredBills.where((b) => _isActiveWithoutPayBill(b)).toList();
+    double pendingActiveWithoutPayAmount = 0;
+    for(var b in activeWithoutPayBills){
+      pendingActiveWithoutPayAmount += FirebaseService.parseAmount(b['remainingDue']?? b['totalAmount']?? b['amount']).toDouble();
+    }
+
     double totalPendingDue = 0;
     int dueUsersCount = 0;
+    List<dynamic> dueUsersList = [];
     for(var u in widget.users){
       double due = double.tryParse(u['pendingDue']?.toString()?? '0')?? 0;
-      if(due > 0){ totalPendingDue += due; dueUsersCount++; }
+      if(due > 0){
+        totalPendingDue += due;
+        dueUsersCount++;
+        dueUsersList.add(u);
+      }
+    }
+
+    int activeCount = 0, disabledCount = 0, expiredCount = 0;
+    DateTime now = DateTime.now();
+    for(var u in widget.users){
+      String status = u['status']?.toString()?? 'disabled';
+      if(status=='active') activeCount++; else disabledCount++;
+      if(u['expiryDate']!=null){
+        try{ DateTime exp = DateTime.fromMillisecondsSinceEpoch(u['expiryDate']); if(now.isAfter(exp)) expiredCount++; }catch(_){}
+      }
     }
 
     return Scaffold(
@@ -90,18 +134,25 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 ]),
               ),
               const SizedBox(height: 16),
-              _animatedItem(0, InkWell(onTap: () => _showUsersList(context, "Fee Jama - ${getMonthYearText(selectedMonth)}", filteredCollections), borderRadius: BorderRadius.circular(20), child: _card("Total Collection - ${monthNames[selectedMonth.month - 1]}", totalCollection, "$paidUsers dafa collection", Colors.green, Icons.check_circle))),
+              _animatedItem(0, InkWell(onTap: () => _showUsersList(context, "Total Collection - Bill se - ${getMonthYearText(selectedMonth)}", billCollectionsOnly), borderRadius: BorderRadius.circular(20), child: _card("Total Collection - Bill se", totalCollectionFromBills, "${billCollectionsOnly.length} bills se collect • Sirf bill wali raqam (STEP 6)", Colors.green, Icons.check_circle))),
               const SizedBox(height: 12),
-              _animatedItem(1, InkWell(onTap: () => _showUsersList(context, "Pending - ${getMonthYearText(selectedMonth)}", filteredBills.where((b) => b['isPaid']!= true).toList()), borderRadius: BorderRadius.circular(20), child: _card("Pending Bills - ${monthNames[selectedMonth.month - 1]}", pendingAmount, "$pendingUsers Users Pending", Colors.orange, Icons.pending))),
+              _animatedItem(1, InkWell(onTap: () => _showUsersList(context, "Pending Bills - Active Without Pay - ${getMonthYearText(selectedMonth)}", activeWithoutPayBills), borderRadius: BorderRadius.circular(20), child: _card("Pending Bills - Active Without Pay", pendingActiveWithoutPayAmount, "${activeWithoutPayBills.length} Users • Jo Active Without Pay kiye (STEP 6)", Colors.orange, Icons.wifi_off))),
               const SizedBox(height: 12),
-              _animatedItem(2, InkWell(onTap: () => _showUsersList(context, "Pending Due Users", widget.users.where((u) => (double.tryParse(u['pendingDue']?.toString()?? '0')??0) > 0).toList()), borderRadius: BorderRadius.circular(20), child: _card("Total Pending Due - All Time", totalPendingDue, "$dueUsersCount Users Ka Baqaya", Colors.redAccent, Icons.warning_rounded))),
-              const SizedBox(height: 12),
-              _animatedItem(3, Row(children: [Expanded(child: _smallCard("Total Pending", "${filteredBills.length}", Icons.people, 0)), const SizedBox(width: 12), Expanded(child: _smallCard("Collected Times", "$paidUsers", Icons.wifi, 150))])),
+              _animatedItem(2, InkWell(onTap: () => _showUsersList(context, "Pending Due - Users ki Dues - All Time", dueUsersList), borderRadius: BorderRadius.circular(20), child: _card("Pending Due - Users ki Dues", totalPendingDue, "$dueUsersCount Users Ka Baqaya • Sirf users ki dues (STEP 6)", Colors.redAccent, Icons.warning_rounded))),
+              const SizedBox(height: 16),
+              Container(padding: EdgeInsets.all(14), decoration: BoxDecoration(color: Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white10)), child: Column(children: [
+                Text("STEP 6 Dashboard Logic", style: GoogleFonts.poppins(color: Color(0xFF7C4DFF), fontSize: 11, fontWeight: FontWeight.bold)),
+                SizedBox(height: 8),
+                _rowDetail("Total Collection (Bill se)", "Rs.${totalCollectionFromBills.toStringAsFixed(0)}", color: Colors.greenAccent),
+                _rowDetail("Pending Bills (Active Without Pay)", "Rs.${pendingActiveWithoutPayAmount.toStringAsFixed(0)} - ${activeWithoutPayBills.length} bills", color: Colors.orangeAccent),
+                _rowDetail("Pending Due (Users dues)", "Rs.${totalPendingDue.toStringAsFixed(0)} - $dueUsersCount users", color: Colors.redAccent),
+              ])),
               const SizedBox(height: 20),
-              _animatedItem(4, Align(alignment: Alignment.centerLeft, child: Text("Recent Collections - ${getMonthYearText(selectedMonth)} (${filteredCollections.length})", style: GoogleFonts.poppins(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)))),
+              _animatedItem(5, Align(alignment: Alignment.centerLeft, child: Text("Recent Bill Collections - ${getMonthYearText(selectedMonth)} (${billCollectionsOnly.length})", style: GoogleFonts.poppins(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)))),
               const SizedBox(height: 10),
-              if (filteredCollections.isEmpty && filteredBills.isEmpty) const Padding(padding: EdgeInsets.only(top: 20), child: Text("Is month ka koi data nahi", style: TextStyle(color: Colors.white38))),
-              ...filteredCollections.map((e) => _animatedItem(5, Padding(padding: const EdgeInsets.only(bottom: 8), child: ListTile(tileColor: const Color(0xFF1E1E1E), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), title: Text(e['name']?? 'User', style: const TextStyle(color: Colors.white, fontSize: 14)), subtitle: Text("${e['type']?? 'bill'} - ${e['date']!= null? e['date'].toString().split('T')[0] : ""} | ${e['package']?? ''}", style: const TextStyle(color: Colors.white30, fontSize: 10)), trailing: Text("Rs. ${e['amount']}", style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)))))).toList(),
+              if (billCollectionsOnly.isEmpty) const Padding(padding: EdgeInsets.only(top: 20), child: Text("Is month bill se koi collection nahi", style: TextStyle(color: Colors.white38))),
+              ...billCollectionsOnly.take(20).map((e) => _animatedItem(6, Padding(padding: const EdgeInsets.only(bottom: 8), child: ListTile(tileColor: const Color(0xFF1E1E1E), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), title: Text(e['name']?? 'User', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)), subtitle: Text("${e['type']?? 'bill'} • ${e['paymentType']?? ''} • ${e['date']!= null? e['date'].toString().split('T')[0] : ""} • Baqaya: Rs.${e['remaining']??0}", style: const TextStyle(color: Colors.white30, fontSize: 9)), trailing: Text("Rs. ${e['amount']}", style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 12)))))).toList(),
+              SizedBox(height: 20),
             ]),
           ),
         ),
@@ -113,20 +164,47 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     return TweenAnimationBuilder(duration: Duration(milliseconds: 250 + (index * 50)), tween: Tween<double>(begin: 0, end: 1), curve: Curves.easeOut, builder: (context, double val, childWidget){ return Opacity(opacity: val, child: Transform.translate(offset: Offset(0, 10 * (1-val)), child: childWidget)); }, child: child);
   }
 
-  void _showUsersList(BuildContext context, String title, List<dynamic> list) {
-    showModalBottomSheet(context: context, backgroundColor: const Color(0xFF1E1E1E), shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))), builder: (c) => Container(padding: const EdgeInsets.all(16), height: 400, child: Column(children: [Text(title, style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)), const Divider(color: Colors.white24), Expanded(child: list.isEmpty? const Center(child: Text("Koi user nahi", style: TextStyle(color: Colors.white54))) : ListView.builder(itemCount: list.length, itemBuilder: (c, i) => ListTile(leading: CircleAvatar(backgroundColor: const Color(0xFF7C4DFF), child: Text(list[i]['name'].toString().isNotEmpty? list[i]['name'][0].toString() : "U")), title: Text(list[i]['name']?? '-', style: const TextStyle(color: Colors.white)), subtitle: Text("Rs. ${list[i]['amount']?? list[i]['pendingDue']?? ''}", style: const TextStyle(color: Colors.white54)), trailing: Icon(list[i]['isPaid']==false? Icons.close : Icons.check, color: list[i]['isPaid']==false? Colors.red : Colors.green))))])));
+  Widget _card(String title, double amount, String subtitle, Color color, IconData icon){
+    return Container(
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(16), border: Border(left: BorderSide(color: color, width: 4))),
+      child: Row(children: [
+        Container(padding: EdgeInsets.all(12), decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: color, size: 22)),
+        SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: GoogleFonts.poppins(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
+          SizedBox(height: 2),
+          Text("Rs. ${amount.toStringAsFixed(0)}", style: GoogleFonts.poppins(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          SizedBox(height: 2),
+          Text(subtitle, style: GoogleFonts.poppins(color: Colors.white38, fontSize: 9)),
+        ])),
+      ]),
+    );
   }
 
-  Widget _card(String title, double amount, String subtitle, Color color, IconData icon) => Container(width: double.infinity, padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(20), border: Border(left: BorderSide(color: color, width: 5)), boxShadow: [BoxShadow(color: color.withOpacity(0.15), blurRadius: 15, offset: const Offset(0, 5))]), child: Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: color)), const SizedBox(width: 15), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(color: Colors.white54, fontSize: 11)), AnimatedCount(amount: amount), Text(subtitle, style: TextStyle(color: color, fontSize: 11))]), const Spacer(), const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white38)]));
-  Widget _smallCard(String t, String v, IconData ic, int delay) => TweenAnimationBuilder<double>(tween: Tween(begin: 0.8, end: 1), duration: Duration(milliseconds: 250), curve: Curves.easeOut, builder: (c, val, child) => Transform.scale(scale: val, child: child), child: Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: const Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(15)), child: Column(children: [Icon(ic, color: Colors.white70), const SizedBox(height: 8), Text(v, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)), Text(t, style: const TextStyle(color: Colors.white54, fontSize: 11))])));
+  Widget _rowDetail(String label, String value, {Color? color}){
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: GoogleFonts.poppins(color: Colors.white54, fontSize: 10)),
+          Text(value, style: GoogleFonts.poppins(color: color?? Colors.white, fontSize: 10, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
 
-}
-
-class AnimatedCount extends StatelessWidget {
-  final double amount;
-  const AnimatedCount({super.key, required this.amount});
-  @override
-  Widget build(BuildContext context){
-    return TweenAnimationBuilder<double>(tween: Tween<double>(begin: 0, end: amount), duration: const Duration(milliseconds: 250), curve: Curves.easeOut, builder: (context, value, child){ return Text("Rs. ${value.toStringAsFixed(0)}", style: GoogleFonts.poppins(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)); });
+  void _showUsersList(BuildContext context, String title, List<dynamic> list){
+    showModalBottomSheet(context: context, backgroundColor: Color(0xFF1E1E1E), shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))), builder: (c){
+      return Container(padding: EdgeInsets.all(16), height: 500, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+        SizedBox(height: 10),
+        Expanded(child: ListView.builder(itemCount: list.length, itemBuilder: (c,i){
+          var e = list[i];
+          return ListTile(title: Text(e['name']?.toString()?? '-', style: GoogleFonts.poppins(color: Colors.white, fontSize: 12)), subtitle: Text("${e['phone']?? ''} • Rs.${e['amount']?? e['pendingDue']?? ''} • ${e['type']?? e['package']?? ''}", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 10)));
+        })),
+      ]));
+    });
   }
 }

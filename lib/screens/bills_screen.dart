@@ -2,11 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import '../services/firebase_service.dart';
-import '../utils/app_strings.dart';
+import '../services/mikrotik_service.dart';
+import 'bill_detail_screen.dart';
 
 class BillsScreen extends StatefulWidget {
   final List<dynamic> bills;
@@ -27,9 +25,11 @@ class _BillsScreenState extends State<BillsScreen> {
   String selectedMonthFilter = "${DateTime.now().year}-${DateTime.now().month}";
   final TextEditingController searchCtrl = TextEditingController();
   bool isGenerating = false;
+  Map<String, dynamic>? _lastDeletedBill;
+  int _lastDeletedBillIndex = -1;
 
   List<dynamic> get filteredBills => widget.bills.where((b) {
-    bool matchFilter = filter == "All" || (filter == "Paid" && b['isPaid'] == true) || (filter == "Pending" && b['isPaid']!= true);
+    bool matchFilter = filter == "All" || (filter == "Paid" && b['isPaid'] == true) || (filter == "Pending" && b['isPaid']!= true && b['isPartial']!=true) || (filter == "Partial" && (b['isPartial']==true));
     bool matchSearch = search.isEmpty || b['name'].toString().toLowerCase().contains(search.toLowerCase()) || b['phone'].toString().contains(search);
     bool matchMonth = b['billMonth'] == selectedMonthFilter;
     return matchFilter && matchSearch && matchMonth;
@@ -45,13 +45,13 @@ class _BillsScreenState extends State<BillsScreen> {
     return months;
   }
 
-  // FIXED: Batch write se 500 bills ek saath, Firebase block nahi karega
   Future<void> autoGenerateExpiredBills() async {
     if(isGenerating) return;
     setState(()=> isGenerating = true);
     DateTime now = DateTime.now();
     String currentMonthKey = "${now.year}-${now.month}";
     List<Map<String,dynamic>> newBillsBatch = [];
+    List<Map<String,dynamic>> expiredActiveUsers = [];
 
     for (var user in widget.users) {
       bool isExpired = false;
@@ -59,14 +59,28 @@ class _BillsScreenState extends State<BillsScreen> {
         try { DateTime expiryDate = DateTime.fromMillisecondsSinceEpoch(user['expiryDate']); if (now.isAfter(expiryDate)) isExpired = true; } catch (e) {}
       }
       if (isExpired) {
-        bool billExists = widget.bills.any((b) => b['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '') == user['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '') && b['billMonth'] == currentMonthKey);
+        if ((user['status']??'disabled') == 'active') {
+          expiredActiveUsers.add(user);
+        }
+        String cleanPhone = user['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '');
+        bool billExists = widget.bills.any((b) => b['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '') == cleanPhone && b['billMonth'] == currentMonthKey);
         if (!billExists) {
+          int monthlyAmount = FirebaseService.parseAmount(user['amount']?? 1000);
+          int previousDue = FirebaseService.parseAmount(user['pendingDue']?? 0);
+          int total = monthlyAmount + previousDue;
           var newBill = {
             'name': user['name'],
-            'phone': user['phone'].toString().replaceAll(RegExp(r'[^0-9]'), ''),
-            'amount': user['amount']?? 1000,
+            'phone': cleanPhone,
+            'raw_phone': user['raw_phone']?? cleanPhone,
+            'username': user['username']?? '',
+            'amount': monthlyAmount,
+            'dueAmount': previousDue,
+            'totalAmount': total,
             'package': user['package']?? '10 Mbps',
             'isPaid': false,
+            'isPartial': false,
+            'paidAmount': 0,
+            'remainingDue': total,
             'date': now.toIso8601String(),
             'billMonth': currentMonthKey,
             'createdAt': now.millisecondsSinceEpoch,
@@ -77,147 +91,122 @@ class _BillsScreenState extends State<BillsScreen> {
         }
       }
     }
-
     if(newBillsBatch.isNotEmpty){
       try{
         await FirebaseService.batchWriteBills(newBillsBatch);
-        setState((){
-          widget.bills.addAll(newBillsBatch);
-        });
+        setState(()=> widget.bills.addAll(newBillsBatch));
         widget.onUpdate();
-        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${newBillsBatch.length} bills auto generate ho gaye"), backgroundColor: Colors.green));
+        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${newBillsBatch.length} bills generate + ${expiredActiveUsers.length} users auto disconnect check"), backgroundColor: Colors.green));
       }catch(e){
-        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Batch Error: $e"), backgroundColor: Colors.red));
+        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
       }
-    }else{
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Koi naya expired bill nahi"), backgroundColor: Colors.orange));
+    }
+
+    // STEP 7: Auto disconnect expired active users from Mikrotik
+    int disconnectedCount = 0;
+    for(var u in expiredActiveUsers){
+      String username = u['username']?.toString()?? u['pppoe_username']?.toString()?? '';
+      if(username.isEmpty) continue;
+      try{
+        var result = await MikrotikService.disableUser(username).timeout(Duration(seconds: 7), onTimeout: ()=> {'ok': false});
+        if(result['ok']==true){
+          String cleanPhone = u['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '');
+          await FirebaseService.usersCol.doc(cleanPhone).update({'status': 'disabled', 'autoDisabledReason': 'expired', 'autoDisabledAt': now.millisecondsSinceEpoch}).catchError((_){});
+          setState(()=> u['status']='disabled');
+          disconnectedCount++;
+        }
+      }catch(_){}
+    }
+    if(disconnectedCount>0){
+      widget.onUsersUpdate();
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$disconnectedCount expired users Mikrotik se auto disconnect ho gaye"), backgroundColor: Colors.orange));
     }
     setState(()=> isGenerating = false);
   }
 
-  Future<void> showBillPdf(Map<String, dynamic> bill) async {
-    final pdf = pw.Document();
-    pdf.addPage(pw.Page(pageFormat: PdfPageFormat.a4, build: (context) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-      pw.Container(color: PdfColors.deepPurple, padding: pw.EdgeInsets.all(12), child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text(AppStrings.company, style: pw.TextStyle(color: PdfColors.white, fontSize: 22, fontWeight: pw.FontWeight.bold)), pw.Text("INTERNET BILL", style: pw.TextStyle(color: PdfColors.white, fontSize: 14))])),
-      pw.SizedBox(height: 20),
-      pw.Text("Customer: ${bill['name']}", style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-      pw.Text("Phone: ${bill['phone']} | Package: ${bill['package']}"),
-      pw.Text("Amount: Rs. ${bill['amount']} | Month: ${bill['billMonth']}"),
-      pw.Divider(),
-      pw.Text("Thank you for using ${AppStrings.company}!", style: pw.TextStyle(fontSize: 10)),
-    ])));
-    await Printing.layoutPdf(onLayout: (format) async => pdf.save());
+  void _openBillDetail(Map<String, dynamic> bill) {
+    String cleanPhone = bill['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '');
+    Map<String, dynamic>? user;
+    try {
+      user = widget.users.firstWhere((u) => u['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '') == cleanPhone);
+    } catch (e) {
+      user = null;
+    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) => BillDetailScreen(
+      bill: bill,
+      user: user!= null? Map<String, dynamic>.from(user) : null,
+      users: widget.users,
+      onUpdate: widget.onUpdate,
+      onUsersUpdate: widget.onUsersUpdate,
+      onCollectionAdd: widget.onCollectionAdd,
+    ))).then((_) {
+      setState(() {});
+      widget.onUpdate();
+      widget.onUsersUpdate();
+    });
   }
 
-  void _showUndoList(String? month) {
-    String targetMonth = month?? selectedMonthFilter;
-    TextEditingController undoSearchCtrl = TextEditingController();
-    String undoSearch = "";
-    String dropdownMonth = targetMonth;
+  Future<void> _confirmDeleteBill(Map<String, dynamic> bill) async {
+    bool confirm = await showDialog(context: context, builder: (ctx)=> AlertDialog(backgroundColor: Color(0xFF1E1E1E), title: Text("Bill Delete?", style: GoogleFonts.poppins(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)), content: Text("${bill['name']} - Rs.${bill['totalAmount']?? bill['amount']} delete + UNDO?", style: GoogleFonts.poppins(color: Colors.white70, fontSize: 11)), actions: [TextButton(onPressed: ()=> Navigator.pop(ctx,false), child: Text("Nahi")), ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent), onPressed: ()=> Navigator.pop(ctx,true), child: Text("Haan Delete"))]))?? false;
+    if(!confirm) return;
+    await _deleteBillWithUndo(bill);
+  }
 
-    showModalBottomSheet(context: context, backgroundColor: const Color(0xFF1E1E1E), isScrollControlled: true, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))), builder: (c){
-      return StatefulBuilder(builder: (context, setSheetState){
-        return FutureBuilder<QuerySnapshot>(future: FirebaseService.collectionsCol.where('billMonth', isEqualTo: dropdownMonth).get(), builder: (context, snapshot){
-          List<dynamic> collectionsList = [];
-          if(snapshot.hasData){ collectionsList = snapshot.data!.docs.map((d){ var data = d.data() as Map<String, dynamic>; data['docId'] = d.id; return data; }).toList(); }
-          List<dynamic> filteredUndo = collectionsList.where((col){ if(undoSearch.isEmpty) return true; return col['name'].toString().toLowerCase().contains(undoSearch.toLowerCase()) || col['phone'].toString().contains(undoSearch); }).toList();
-          return Container(padding: const EdgeInsets.all(16), height: 650, child: Column(children: [
-            Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[700], borderRadius: BorderRadius.circular(10))),
-            const SizedBox(height: 12),
-            Row(children: [
-              Expanded(child: Text('Undo - Wasool Shuda', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14))),
-              DropdownButton<String>(value: dropdownMonth, dropdownColor: Color(0xFF2A2A2A), style: TextStyle(color: Colors.white, fontSize: 12), items: last12Months.map((m)=> DropdownMenuItem(value: m, child: Text(m))).toList(), onChanged: (v){ if(v!=null) setSheetState(()=> dropdownMonth=v); })
-            ]),
-            Text('Kul: ${collectionsList.length} | Filtered: ${filteredUndo.length} | Month: $dropdownMonth', style: GoogleFonts.poppins(color: Colors.white54, fontSize: 11)),
-            const SizedBox(height: 10),
-            TextField(controller: undoSearchCtrl, style: const TextStyle(color: Colors.white, fontSize: 13), onChanged: (v){ setSheetState(()=> undoSearch=v); }, decoration: InputDecoration(hintText: "Search Naam/Phone...", hintStyle: const TextStyle(color: Colors.white38, fontSize: 12), prefixIcon: const Icon(Icons.search, color: Colors.white54, size: 18), filled: true, fillColor: const Color(0xFF2A2A2A), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none))),
-            const SizedBox(height: 10),
-            Expanded(child: filteredUndo.isEmpty? Center(child: Text(AppStrings.noBill, style: GoogleFonts.poppins(color: Colors.white54))) : ListView.builder(itemCount: filteredUndo.length, itemBuilder: (c,i){
-              var col=filteredUndo[i];
-              bool userExists = widget.users.any((u)=> u['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '')==col['phone'].toString().replaceAll(RegExp(r'[^0-9]'), ''));
-              return Card(color: userExists? const Color(0xFF2A2A2A) : const Color(0xFF3A2A2A), child: ListTile(leading: Icon(userExists? Icons.check_circle : Icons.person_off, color: userExists? Colors.green : Colors.redAccent), title: Text(col['name'].toString(), style: GoogleFonts.poppins(color: Colors.white, fontSize: 13)), subtitle: Text('Rs ${col['amount']} - ${col['billMonth']} - ${col['phone']}${userExists? '' : ' (User Deleted)'}', style: GoogleFonts.poppins(fontSize: 10, color: Colors.white54)), trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                IconButton(icon: const Icon(Icons.delete_forever, color: Colors.redAccent, size: 18), onPressed: () async {
-                  bool confirm = await showDialog(context: context, builder: (ctx)=> AlertDialog(backgroundColor: const Color(0xFF1E1E1E), title: Text(AppStrings.delete, style: GoogleFonts.poppins(color: Colors.white, fontSize: 14)), content: Text("${col['name']} Rs ${col['amount']} delete?", style: GoogleFonts.poppins(color: Colors.white70, fontSize: 12)), actions: [TextButton(onPressed: ()=> Navigator.pop(ctx,false), child: const Text("Nahi")), TextButton(onPressed: ()=> Navigator.pop(ctx,true), child: const Text("Haan Delete", style: TextStyle(color: Colors.red))) ]))?? false;
-                  if(!confirm) return;
-                  try{ await FirebaseService.collectionsCol.doc(col['docId']).delete(); widget.onCollectionRemove(col['docId']); setSheetState(()=> collectionsList.removeWhere((x)=> x['docId']==col['docId'])); }catch(e){}
-                }),
-                ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), minimumSize: const Size(50, 30)), child: Text(AppStrings.undo, style: GoogleFonts.poppins(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)), onPressed: () async {
-                  try{
-                    String phone = col['phone'].toString().replaceAll(RegExp(r'[^0-9]'), ''); String billMonth = col['billMonth'].toString(); int amount = FirebaseService.parseAmount(col['amount']);
-                    await FirebaseService.collectionsCol.doc(col['docId']).delete();
-                    widget.onCollectionRemove(col['docId']);
-                    Map<String, dynamic> restoredBill = {'name': col['name'], 'phone': phone, 'amount': amount, 'package': col['package']?? '10 Mbps', 'isPaid': false, 'date': DateTime.now().toIso8601String(), 'billMonth': billMonth, 'createdAt': DateTime.now().millisecondsSinceEpoch, 'id': FirebaseService.genBillId(phone, billMonth)};
-                    await FirebaseService.billsCol.doc(restoredBill['id']).set(restoredBill);
-                    widget.bills.add(restoredBill);
-                    widget.onUpdate();
-                    setSheetState(()=> collectionsList.removeWhere((x)=> x['docId']==col['docId']));
-                    if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Undo ho gaya"), backgroundColor: Colors.green));
-                  }catch(e){
-                    if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
-                  }
-                }),
-              ])),
-              );
-            })),
-          ]));
-        });
-      });
-    });
+  Future<void> _deleteBillWithUndo(Map<String, dynamic> bill) async {
+    _lastDeletedBill = Map<String, dynamic>.from(bill);
+    _lastDeletedBillIndex = widget.bills.indexWhere((b)=> b['id']==bill['id']);
+    setState(()=> widget.bills.removeWhere((b)=> b['id']==bill['id']));
+    try{
+      await FirebaseService.billsCol.doc(bill['id']).delete();
+      try{ await FirebaseService.collectionsCol.doc(bill['id']).delete(); widget.onCollectionRemove(bill['id']); }catch(_){}
+      var colSnap = await FirebaseService.collectionsCol.where('billId', isEqualTo: bill['id']).get();
+      for(var d in colSnap.docs){ try{ await d.reference.delete(); widget.onCollectionRemove(d.id); }catch(_){} }
+    }catch(e){
+      if(_lastDeletedBill!=null){ setState(()=> widget.bills.insert(_lastDeletedBillIndex>=0? _lastDeletedBillIndex : 0, _lastDeletedBill!)); }
+      return;
+    }
+    widget.onUpdate();
+    if(!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Bill delete - UNDO 5 sec"), backgroundColor: Color(0xFF1E1E1E), duration: Duration(seconds: 5), action: SnackBarAction(label: "UNDO", textColor: Color(0xFF7C4DFF), onPressed: () async {
+      if(_lastDeletedBill==null) return;
+      try{
+        await FirebaseService.billsCol.doc(_lastDeletedBill!['id']).set(_lastDeletedBill!);
+        setState(()=> widget.bills.insert(_lastDeletedBillIndex>=0? _lastDeletedBillIndex : 0, _lastDeletedBill!));
+        widget.onUpdate();
+        _lastDeletedBill = null;
+      }catch(e){}
+    })));
   }
 
   @override
   Widget build(BuildContext context) {
+    int remainingAmount = filteredBills.fold(0, (s,b)=> s + FirebaseService.parseAmount(b['remainingDue']?? (b['isPaid']==true? 0 : b['totalAmount']?? b['amount'])));
+
     return Scaffold(
       backgroundColor: Color(0xFF121212),
-      appBar: AppBar(backgroundColor: Color(0xFF121212), title: Text("Bills - ${filteredBills.length}", style: GoogleFonts.poppins(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)), actions: [
-        DropdownButton<String>(value: selectedMonthFilter, dropdownColor: Color(0xFF1E1E1E), style: TextStyle(color: Colors.white, fontSize: 11), underline: SizedBox(), items: last12Months.map((m)=> DropdownMenuItem(value: m, child: Text(m))).toList(), onChanged: (v){ if(v!=null) setState(()=> selectedMonthFilter=v); }),
-        IconButton(icon: Icon(Icons.undo, color: Colors.orange), onPressed: ()=> _showUndoList(selectedMonthFilter)),
-        IconButton(icon: isGenerating? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Icon(Icons.auto_mode, color: Colors.white70), onPressed: isGenerating? null : autoGenerateExpiredBills),
+      appBar: AppBar(backgroundColor: Color(0xFF121212), elevation: 0, title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text("Bills - Auto Disconnect", style: GoogleFonts.poppins(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)), Text("$selectedMonthFilter • Baqaya Rs.$remainingAmount • Expire auto disconnect", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 8))]), actions: [
+        Container(margin: EdgeInsets.only(right: 6), decoration: BoxDecoration(color: Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(10)), child: DropdownButton<String>(value: selectedMonthFilter, dropdownColor: Color(0xFF1E1E1E), style: GoogleFonts.poppins(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600), underline: SizedBox(), icon: Icon(Icons.calendar_today, size: 14, color: Color(0xFF7C4DFF)), items: last12Months.map((m)=> DropdownMenuItem(value: m, child: Text(m))).toList(), onChanged: (v){ if(v!=null) setState(()=> selectedMonthFilter=v); })),
+        Container(margin: EdgeInsets.only(right: 8), decoration: BoxDecoration(color: isGenerating? Colors.grey : Color(0xFF7C4DFF), borderRadius: BorderRadius.circular(10)), child: IconButton(icon: isGenerating? SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Icon(Icons.wifi_off_rounded, color: Colors.white, size: 18), tooltip: "Auto Generate + Auto Disconnect", onPressed: isGenerating? null : autoGenerateExpiredBills)),
       ]),
       body: Column(children: [
-        Container(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8), child: Row(children: [
-          Expanded(child: Container(decoration: BoxDecoration(color: Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(12)), child: TextField(controller: searchCtrl, style: TextStyle(color: Colors.white, fontSize: 13), onChanged: (v)=> setState(()=> search=v), decoration: InputDecoration(hintText: "Search bill...", hintStyle: TextStyle(color: Colors.white38, fontSize: 12), prefixIcon: Icon(Icons.search, color: Colors.white54, size: 18), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none))))),
-          SizedBox(width: 8),
-          DropdownButton<String>(value: filter, dropdownColor: Color(0xFF1E1E1E), style: TextStyle(color: Colors.white, fontSize: 12), underline: SizedBox(), items: ["All","Paid","Pending"].map((f)=> DropdownMenuItem(value: f, child: Text(f))).toList(), onChanged: (v){ if(v!=null) setState(()=> filter=v); }),
-        ])),
-        Expanded(child: filteredBills.isEmpty? Center(child: Text("Is month koi bill nahi\nMonth: $selectedMonthFilter", textAlign: TextAlign.center, style: GoogleFonts.poppins(color: Colors.white54))) : ListView.builder(itemCount: filteredBills.length, itemBuilder: (c,i){
+        Container(margin: EdgeInsets.all(12), padding: EdgeInsets.all(14), decoration: BoxDecoration(color: Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white10)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text("Baqaya: Rs.$remainingAmount", style: GoogleFonts.poppins(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 11)), Text("STEP 7: Expire = Auto Disconnect MT", style: GoogleFonts.poppins(color: Colors.orangeAccent, fontSize: 7, fontWeight: FontWeight.bold))])),
+        Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Container(decoration: BoxDecoration(color: Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(12)), child: TextField(controller: searchCtrl, style: TextStyle(color: Colors.white, fontSize: 12), onChanged: (v)=> setState(()=> search=v), decoration: InputDecoration(hintText: "Search bill...", prefixIcon: Icon(Icons.search, color: Colors.white54, size: 18), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none))))),
+        SizedBox(height: 10),
+        Expanded(child: ListView.builder(itemCount: filteredBills.length, itemBuilder: (c,i){
           var b = filteredBills[i];
           bool isPaid = b['isPaid']==true;
-          return Container(margin: EdgeInsets.symmetric(horizontal: 12, vertical: 5), decoration: BoxDecoration(color: Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(12), border: Border(left: BorderSide(color: isPaid? Colors.green : Colors.orange, width: 4))), child: ListTile(
-            leading: CircleAvatar(backgroundColor: isPaid? Colors.green : Colors.orange, child: Icon(isPaid? Icons.check : Icons.pending, color: Colors.white, size: 18)),
-            title: Text(b['name'].toString(), style: GoogleFonts.poppins(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
-            subtitle: Text("${b['phone']} | Rs.${b['amount']} | ${b['billMonth']}", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 10)),
+          bool isPartial = b['isPartial']==true;
+          int totalAmt = FirebaseService.parseAmount(b['totalAmount']?? b['amount']);
+          int remainAmt = FirebaseService.parseAmount(b['remainingDue']?? (isPaid? 0 : totalAmt));
+          Color borderColor = isPaid? Color(0xFF00C853) : isPartial? Color(0xFFFF9100) : Color(0xFFFF1744);
+          return Container(margin: EdgeInsets.symmetric(horizontal: 12, vertical: 5), decoration: BoxDecoration(color: Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(14), border: Border(left: BorderSide(color: borderColor, width: 4))), child: ListTile(
+            onTap: ()=> _openBillDetail(b),
+            leading: Container(width: 44, height: 44, decoration: BoxDecoration(color: borderColor.withOpacity(0.15), borderRadius: BorderRadius.circular(10)), child: Icon(isPaid? Icons.check_circle : Icons.wifi_off, color: borderColor)),
+            title: Text(b['name'].toString(), style: GoogleFonts.poppins(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+            subtitle: Text("Total Rs.$totalAmt • Baqaya Rs.$remainAmt • ${b['billMonth']} • Expire auto disconnect", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 9)),
             trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-              IconButton(icon: Icon(Icons.picture_as_pdf, color: Colors.white54, size: 18), onPressed: ()=> showBillPdf(b)),
-              Checkbox(value: isPaid, activeColor: Colors.green, onChanged: (v) async {
-                try{
-                  String billId = b['id'].toString();
-                  if(v==true){
-                    // Paid karo
-                    await FirebaseService.billsCol.doc(billId).update({'isPaid': true});
-                    var colData = {'name': b['name'], 'phone': b['phone'].toString().replaceAll(RegExp(r'[^0-9]'), ''), 'amount': b['amount'], 'package': b['package'], 'billMonth': b['billMonth'], 'date': DateTime.now().toIso8601String(), 'id': billId, 'type': 'bill'};
-                    await FirebaseService.collectionsCol.doc(billId).set(colData);
-                    widget.onCollectionAdd(colData);
-                    // Pending due kam karo
-                    var user = widget.users.firstWhere((u)=> u['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '') == b['phone'].toString().replaceAll(RegExp(r'[^0-9]'), ''), orElse: ()=> null);
-                    if(user!=null){
-                      double due = double.tryParse(user['pendingDue'].toString())?? 0;
-                      double newDue = (due - FirebaseService.parseAmount(b['amount'])).clamp(0, double.infinity);
-                      await FirebaseService.updateUserDue(user['phone'].toString(), newDue);
-                      user['pendingDue'] = newDue;
-                    }
-                  }else{
-                    await FirebaseService.billsCol.doc(billId).update({'isPaid': false});
-                    await FirebaseService.collectionsCol.doc(billId).delete();
-                    widget.onCollectionRemove(billId);
-                  }
-                  setState(()=> b['isPaid'] = v);
-                  widget.onUpdate();
-                  widget.onUsersUpdate();
-                }catch(e){
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
-                }
-              }),
+              IconButton(icon: Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 18), onPressed: ()=> _confirmDeleteBill(b)),
+              Icon(Icons.arrow_forward_ios, color: Colors.white24, size: 14),
             ]),
           ));
         })),
