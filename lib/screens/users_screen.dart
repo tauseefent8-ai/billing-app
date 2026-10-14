@@ -8,6 +8,7 @@ import '../services/sms_reminder_service.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
 import '../services/mikrotik_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class UsersScreen extends StatefulWidget {
   final List<dynamic> users;
@@ -28,9 +29,21 @@ class _UsersScreenState extends State<UsersScreen> {
   @override
   void initState() {
     super.initState();
+    _loadMT();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _autoGenerateExpiredBillsSilent();
     });
+  }
+
+  Future<void> _loadMT() async {
+    var p = await SharedPreferences.getInstance();
+    String ip = p.getString('mt_ip')?? "";
+    String user = p.getString('mt_user')?? "";
+    String pass = p.getString('mt_pass')?? "";
+    String port = p.getString('mt_port')?? "80";
+    if (ip.isNotEmpty && user.isNotEmpty) {
+      MikrotikService.setCreds(ip: ip, port: port, username: user, password: pass);
+    }
   }
 
   List<dynamic> get filtered {
@@ -110,11 +123,11 @@ class _UsersScreenState extends State<UsersScreen> {
       ));
     }
     try { if (username.isNotEmpty) { try { await MikrotikService.deleteUser(username).timeout(Duration(seconds: 8), onTimeout: () => {'ok': true}); } catch (_) { await MikrotikService.disableUser(username).timeout(Duration(seconds: 8), onTimeout: () => {'ok': true}); } } } catch (e) { debugPrint("MikroTik delete ignored: $e"); }
-    try { await FirebaseService.usersCol.doc(cleanPhone).delete().timeout(Duration(seconds: 10)); debugPrint("✅ Firebase deleted: $cleanPhone"); } catch (e) { debugPrint("❌ Firebase delete error: $e"); try{ await FirebaseFirestore.instance.collection('users').doc(cleanPhone).delete(); }catch(_){} }
+    try { await FirebaseService.usersCol.doc(cleanPhone).delete().timeout(Duration(seconds: 10)); } catch (e) { try{ await FirebaseFirestore.instance.collection('users').doc(cleanPhone).delete(); }catch(_){} }
     try { Provider.of<AppProvider>(context, listen: false).removeUserLocal(cleanPhone); } catch (_) {}
     try { widget.users.removeWhere((element) => element['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '') == cleanPhone); } catch (_) {}
     widget.onUsersUpdate();
-    if (mounted) { Navigator.pop(context); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$name delete ho gaya", style: GoogleFonts.poppins(fontSize: 11)), backgroundColor: Colors.green)); }
+    if (mounted) { Navigator.pop(context); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$name delete ho gaya"), backgroundColor: Colors.green)); }
   }
 
   void _showAddUserDialog({Map<String, dynamic>? existingUser}) {
@@ -182,15 +195,6 @@ class _UsersScreenState extends State<UsersScreen> {
                       String rawPhone = phoneCtrl.text.trim();
                       String phone = rawPhone.replaceAll(RegExp(r'[^0-9]'), '');
                       if(phone.length < 10) throw Exception("Phone number sahi nahi");
-
-                      // DEBUG
-                      String authUid = FirebaseAuth.instance.currentUser?.uid?? "NULL";
-                      String finalUid = FirebaseService.uid;
-                      debugPrint("=== SAVE DEBUG ===");
-                      debugPrint("Auth UID: $authUid");
-                      debugPrint("Final UID: $finalUid");
-                      debugPrint("Path: isps/$finalUid/my_users/$phone");
-
                       String profileForMT = selectedPackage.replaceAll(" Mbps", "M").replaceAll(" ", "");
                       Map<String, dynamic> newUserData = {
                         'name': nameCtrl.text.trim(), 'phone': phone, 'raw_phone': rawPhone,
@@ -205,17 +209,29 @@ class _UsersScreenState extends State<UsersScreen> {
                         'createdAt': isEdit? (existingUser['createdAt']?? DateTime.now().millisecondsSinceEpoch) : DateTime.now().millisecondsSinceEpoch,
                         'updatedAt': DateTime.now().millisecondsSinceEpoch,
                       };
-
-                      // === FIX: Direct Firestore write with fallback ===
                       final firestore = FirebaseFirestore.instance;
-                      await firestore.collection('isps').doc(finalUid).set({
-                        'biz_name': 'MK-Fiber',
-                        'lastActive': FieldValue.serverTimestamp(),
-                      }, SetOptions(merge: true));
-
-                      await firestore.collection('isps').doc(finalUid).collection('my_users').doc(phone).set(newUserData, SetOptions(merge: true)).timeout(Duration(seconds: 20));
-                      debugPrint("✅ FIREBASE SAVE SUCCESS: $phone at isps/$finalUid/my_users/$phone");
-
+                      await firestore.collection('isps').doc(FirebaseService.uid).set({'biz_name': 'MK-Fiber','lastActive': FieldValue.serverTimestamp(),}, SetOptions(merge: true));
+                      await firestore.collection('isps').doc(FirebaseService.uid).collection('my_users').doc(phone).set(newUserData, SetOptions(merge: true)).timeout(Duration(seconds: 20));
+                      if(!isEdit){
+                        try{
+                          String currentMonthKey = "${DateTime.now().year}-${DateTime.now().month}";
+                          String billId = FirebaseService.genBillId(phone, currentMonthKey);
+                          bool billExists = widget.bills.any((b) => b['id'] == billId);
+                          if(!billExists){
+                            int monthlyAmount = FirebaseService.parseAmount(amountCtrl.text);
+                            var firstBill = {
+                              'name': nameCtrl.text.trim(), 'phone': phone, 'raw_phone': rawPhone, 'username': userCtrl.text.trim(),
+                              'amount': monthlyAmount, 'dueAmount': 0, 'totalAmount': monthlyAmount, 'pendingDue': monthlyAmount,
+                              'package': selectedPackage, 'isPaid': false, 'isPartial': false, 'paidAmount': 0, 'remainingDue': monthlyAmount,
+                              'date': DateTime.now().toIso8601String(), 'billMonth': currentMonthKey, 'createdAt': DateTime.now().millisecondsSinceEpoch,
+                              'autoGenerated': false, 'status': 'pending', 'id': billId
+                            };
+                            await FirebaseService.billsCol.doc(billId).set(firstBill);
+                            widget.bills.insert(0, firstBill);
+                            widget.onBillsUpdate();
+                          }
+                        }catch(e){ debugPrint("First bill error: $e"); }
+                      }
                       try{
                         var appProv = Provider.of<AppProvider>(context, listen: false);
                         if(isEdit){ appProv.updateUserLocal(newUserData); } else { appProv.addUserLocal(newUserData); }
@@ -225,11 +241,10 @@ class _UsersScreenState extends State<UsersScreen> {
                       }
                       widget.onUsersUpdate();
                       if (mounted) Navigator.pop(ctx);
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isEdit? "Updated! ${nameCtrl.text}" : "✅ Firebase me save ho gaya: ${nameCtrl.text}"), backgroundColor: Colors.green, duration: Duration(seconds: 3)));
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isEdit? "Updated! ${nameCtrl.text}" : "✅ Save ho gaya: ${nameCtrl.text} - Bill bhi ban gaya"), backgroundColor: Colors.green));
                     } catch (e, st) {
-                      debugPrint("SAVE ERROR FULL: $e");
-                      debugPrint("STACK: $st");
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red, duration: Duration(seconds: 6)));
+                      debugPrint("SAVE ERROR: $e $st");
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
                     } finally {
                       if (ctx.mounted) setDialogState(() => isSaving = false);
                     }
@@ -247,7 +262,7 @@ class _UsersScreenState extends State<UsersScreen> {
   void _showUserDetails(Map<String, dynamic> user) {
     bool isExpired = false;
     if(user['expiryDate']!= null){ try{ isExpired = DateTime.now().isAfter(DateTime.fromMillisecondsSinceEpoch(user['expiryDate'])); }catch(_){} }
-    bool isActive = (user['status']?? 'active') == 'active';
+    bool isActive = (user['status']?? 'disabled') == 'active';
     showModalBottomSheet(context: context, backgroundColor: Color(0xFF1E1E1E), shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))), isScrollControlled: true,
         builder: (ctx){
           return Container(padding: EdgeInsets.all(16), child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -256,7 +271,7 @@ class _UsersScreenState extends State<UsersScreen> {
               CircleAvatar(backgroundColor: Color(0xFF7C4DFF), radius: 24, child: Text(user['name'].toString().isNotEmpty? user['name'].toString()[0].toUpperCase() : "U", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18))),
               SizedBox(width: 12),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(user['name']?? '-', style: GoogleFonts.poppins(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)), Text("@${user['username']?? ''} | ${user['package']?? ''}", style: GoogleFonts.poppins(color: Colors.white54, fontSize: 11))])),
-              Container(padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: isActive? Colors.green.withOpacity(0.2) : Colors.red.withOpacity(0.2), borderRadius: BorderRadius.circular(8)), child: Text(isActive? "Active" : "Disabled", style: GoogleFonts.poppins(color: isActive? Colors.green : Colors.red, fontSize: 10, fontWeight: FontWeight.bold))),
+              Container(padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: isActive? Colors.green.withOpacity(0.2) : Colors.red.withOpacity(0.2), borderRadius: BorderRadius.circular(8)), child: Text(isActive? "Active" : "Disabled", style: GoogleFonts.poppins(color: isActive? Colors.green : Colors.redAccent, fontSize: 10, fontWeight: FontWeight.bold))),
             ]),
             SizedBox(height: 16),
             _detailRow(Icons.phone, "Phone", user['raw_phone']?? user['phone']?? '-'), _detailRow(Icons.badge, "CNIC", user['cnic']?? '-'),
@@ -264,12 +279,13 @@ class _UsersScreenState extends State<UsersScreen> {
             _detailRow(Icons.payments, "Amount", "Rs. ${user['amount']?? '0'}"), _detailRow(Icons.account_balance_wallet, "Pending Due", "Rs. ${user['pendingDue']?? user['amount']?? '0'}"),
             _detailRow(Icons.account_circle, "PPPoE User", user['pppoe_username']?? user['username']?? '-'), _detailRow(Icons.lock, "PPPoE Pass", user['pppoe_password']?? user['password']?? '-'),
             _detailRow(Icons.calendar_today, "Expiry", user['expiryDate']!= null? _formatExpiry(user['expiryDate']) : '-', isRed: isExpired),
-            if(isExpired) Padding(padding: EdgeInsets.only(top: 6), child: Text("⚠️ Expired", style: GoogleFonts.poppins(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.w600))),
+            if(isExpired) Padding(padding: EdgeInsets.only(top: 6), child: Text("⚠️ Expired - Wifi button hide, sirf Bills se Active hoga", style: GoogleFonts.poppins(color: Colors.orange, fontSize: 10, fontWeight: FontWeight.w600))),
             SizedBox(height: 18),
             Row(children: [
               Expanded(child: OutlinedButton.icon(icon: Icon(Icons.edit, size: 16, color: Colors.white), label: Text("Edit", style: GoogleFonts.poppins(color: Colors.white, fontSize: 12)), style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.white24), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), onPressed: (){ Navigator.pop(ctx); _showAddUserDialog(existingUser: user); })),
               SizedBox(width: 10),
-              Expanded(child: ElevatedButton.icon(icon: Icon(Icons.wifi_off, size: 16, color: Colors.white), label: Text(isActive? "Disconnect" : "Connect", style: GoogleFonts.poppins(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)), style: ElevatedButton.styleFrom(backgroundColor: isActive? Colors.redAccent : Colors.green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), onPressed: () async { Navigator.pop(ctx); await _toggleUserStatus(user); })),
+              if(!isExpired)
+                Expanded(child: ElevatedButton.icon(icon: Icon(isActive? Icons.wifi_off : Icons.wifi, size: 16, color: Colors.white), label: Text(isActive? "Net OFF" : "Net ON", style: GoogleFonts.poppins(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)), style: ElevatedButton.styleFrom(backgroundColor: isActive? Colors.redAccent : Colors.green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), onPressed: () async { Navigator.pop(ctx); await _toggleUserStatus(user); })),
             ]),
             SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
           ])));
@@ -286,23 +302,46 @@ class _UsersScreenState extends State<UsersScreen> {
     ]));
   }
 
+  // ===== FINAL: Manual Net ON/OFF + Expiry par gaib =====
   Future<void> _toggleUserStatus(Map<String, dynamic> user) async {
-    bool isCurrentlyActive = (user['status']?? 'active') == 'active';
-    String newStatus = isCurrentlyActive? 'disabled' : 'active';
+    bool isCurrentlyActive = (user['status']?? 'disabled') == 'active';
     String phone = user['phone'].toString().replaceAll(RegExp(r'[^0-9]'), '');
     String username = user['username']?.toString()?? user['pppoe_username']?.toString()?? '';
-    setState((){ user['status'] = newStatus; });
+    String password = user['password']?.toString()?? user['pppoe_password']?.toString()?? '1234';
+    String profile = user['speed']?.toString()?? user['package']?.toString().replaceAll(" Mbps", "M").replaceAll(" ", "")?? '10M';
+
+    if (username.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Username khali hai"), backgroundColor: Colors.red));
+      return;
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(isCurrentlyActive? "Net OFF kar raha hun $username..." : "Net ON kar raha hun $username..."),
+          backgroundColor: Colors.blueGrey
+      ));
+    }
+
     try{
-      Map<String, dynamic> result;
-      if(isCurrentlyActive){ result = await MikrotikService.disableUser(username).timeout(Duration(seconds: 10), onTimeout: ()=> {'ok': true}); } else { result = await MikrotikService.enableUser(username).timeout(Duration(seconds: 10), onTimeout: ()=> {'ok': true}); }
-      if(result['ok'] == false) throw Exception(result['msg']?? 'MikroTik error');
-      await FirebaseService.usersCol.doc(phone).update({'status': newStatus});
-      try{ Provider.of<AppProvider>(context, listen: false).updateUserLocal({'phone': phone, 'status': newStatus}); }catch(_){}
+      await _loadMT();
+      if(isCurrentlyActive){
+        var result = await MikrotikService.disableUser(username).timeout(Duration(seconds: 10), onTimeout: ()=> {'ok': false});
+        await FirebaseService.usersCol.doc(phone).update({'status': 'disabled','autoDisabledReason': 'manual_off','updatedAt': DateTime.now().millisecondsSinceEpoch});
+        if(mounted) setState(()=> user['status']='disabled');
+        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${user['name']} Net OFF"), backgroundColor: Colors.red));
+      } else {
+        try { await MikrotikService.createProfileIfNotExists(profile); } catch(_){}
+        var createResult = await MikrotikService.createUser(username: username, password: password, profile: profile).timeout(Duration(seconds: 12), onTimeout: ()=> {'ok': false});
+        var enableResult = await MikrotikService.enableUser(username).timeout(Duration(seconds: 10), onTimeout: ()=> {'ok': false});
+        await FirebaseService.usersCol.doc(phone).update({'status': 'active','updatedAt': DateTime.now().millisecondsSinceEpoch});
+        if(mounted) setState(()=> user['status']='active');
+        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${user['name']} Net ON"), backgroundColor: Colors.green));
+      }
+      try{ Provider.of<AppProvider>(context, listen: false).updateUserLocal({'phone': phone, 'status': user['status']}); }catch(_){}
       widget.onUsersUpdate();
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(isCurrentlyActive? "${user['name']} Disabled" : "${user['name']} Enabled"), backgroundColor: isCurrentlyActive? Colors.red : Colors.green));
     }catch(e){
-      setState((){ user['status'] = isCurrentlyActive? 'active' : 'disabled'; });
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("MikroTik Error: $e"), backgroundColor: Colors.red));
+      debugPrint("TOGGLE ERROR: $e");
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
     }
   }
 
@@ -324,14 +363,15 @@ class _UsersScreenState extends State<UsersScreen> {
             showDialog(context: context, builder: (c)=> AlertDialog(backgroundColor: Color(0xFF1E1E1E), title: Text("Search", style: GoogleFonts.poppins(color: Colors.white, fontSize: 14)), content: TextField(controller: searchCtrl, autofocus: true, style: TextStyle(color: Colors.white), onChanged: (v){ setState(()=> search=v); }, decoration: InputDecoration(hintText: "Name / Phone", hintStyle: TextStyle(color: Colors.white38))), actions: [TextButton(onPressed: (){ searchCtrl.clear(); setState(()=> search=""); Navigator.pop(c); }, child: Text("Clear")), TextButton(onPressed: ()=> Navigator.pop(c), child: Text("OK"))]));
           })]),
       body: filtered.isEmpty? Center(child: Text("Koi customer nahi", style: GoogleFonts.poppins(color: Colors.white54))) : ListView.builder(itemCount: filtered.length, itemBuilder: (c,i){
-        var u = filtered[i]; bool isExpired = false; if(u['expiryDate']!= null){ try{ isExpired = DateTime.now().isAfter(DateTime.fromMillisecondsSinceEpoch(u['expiryDate'])); }catch(_){} } bool isActive = (u['status']?? 'active') == 'active';
+        var u = filtered[i]; bool isExpired = false; if(u['expiryDate']!= null){ try{ isExpired = DateTime.now().isAfter(DateTime.fromMillisecondsSinceEpoch(u['expiryDate'])); }catch(_){} } bool isActive = (u['status']?? 'disabled') == 'active';
         return Container(margin: EdgeInsets.symmetric(horizontal: 12, vertical: 5), decoration: BoxDecoration(color: Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(12), border: isExpired? Border.all(color: Colors.red.withOpacity(0.5)) : null),
             child: ListTile(onTap: ()=> _showUserDetails(u),
-              leading: Stack(children: [CircleAvatar(backgroundColor: isExpired? Colors.red : Color(0xFF7C4DFF), child: Text(u['name'].toString().isNotEmpty? u['name'].toString()[0].toUpperCase() : "U", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))), if(!isActive) Positioned(right: 0, bottom: 0, child: Container(decoration: BoxDecoration(color: Colors.red, shape: BoxShape.circle), padding: EdgeInsets.all(2), child: Icon(Icons.block, color: Colors.white, size: 8)))]),
+              leading: Stack(children: [CircleAvatar(backgroundColor: isExpired? Colors.red : (isActive? Colors.green : Color(0xFF7C4DFF)), child: Text(u['name'].toString().isNotEmpty? u['name'].toString()[0].toUpperCase() : "U", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))), if(!isActive) Positioned(right: 0, bottom: 0, child: Container(decoration: BoxDecoration(color: Colors.red, shape: BoxShape.circle), padding: EdgeInsets.all(2), child: Icon(Icons.close, color: Colors.white, size: 8)))]),
               title: Row(children: [Expanded(child: Text(u['name']?? '-', style: GoogleFonts.poppins(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)), if(isExpired) Container(margin: EdgeInsets.only(left: 4), padding: EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(4)), child: Text("EXPIRE", style: GoogleFonts.poppins(color: Colors.white, fontSize: 7, fontWeight: FontWeight.bold)))]),
-              subtitle: Text("${u['phone']} | ${u['package']} | Rs.${u['amount']} ${isActive? '' : '| Disabled'}", style: GoogleFonts.poppins(color: isActive? Colors.white54 : Colors.redAccent, fontSize: 9)),
+              subtitle: Text("${u['phone']} | ${u['package']} | Rs.${u['amount']} ${isActive? '| Net ON' : '| Net OFF'}", style: GoogleFonts.poppins(color: isActive? Colors.greenAccent : Colors.redAccent, fontSize: 9)),
               trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                IconButton(icon: Icon(isActive? Icons.wifi_off : Icons.wifi, color: isActive? Colors.orangeAccent : Colors.greenAccent, size: 18), onPressed: ()=> _toggleUserStatus(u)),
+                if(!isExpired)
+                  IconButton(icon: Icon(isActive? Icons.wifi : Icons.wifi_off, color: isActive? Colors.greenAccent : Colors.redAccent, size: 22), tooltip: isActive? "Net OFF karo" : "Net ON karo", onPressed: ()=> _toggleUserStatus(u)),
                 IconButton(icon: Icon(Icons.message, color: Colors.greenAccent, size: 18), onPressed: ()=> SmsReminderService.sendWhatsAppReminder(u['phone'].toString(), u['name'].toString(), FirebaseService.parseAmount(u['pendingDue']?? u['amount']))),
                 IconButton(icon: Icon(Icons.delete, color: Colors.redAccent, size: 18), onPressed: () async {
                   bool confirm = await showDialog(context: context, builder: (ctx)=> AlertDialog(backgroundColor: Color(0xFF1E1E1E), title: Text("Delete?", style: GoogleFonts.poppins(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)), content: Text("${u['name']} ko 3no jagah se delete karna hai?\n\n• MikroTik\n• Firebase\n• App", style: GoogleFonts.poppins(color: Colors.white70, fontSize: 11)), actions: [TextButton(onPressed: ()=> Navigator.pop(ctx,false), child: Text("Nahi")), ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: ()=> Navigator.pop(ctx,true), child: Text("Haan Delete Karo", style: GoogleFonts.poppins(color: Colors.white, fontSize: 11)))],))?? false;

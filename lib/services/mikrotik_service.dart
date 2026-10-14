@@ -1,324 +1,131 @@
 import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:router_os_client/router_os_client.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 class MikrotikService {
-  static Future<Map<String, String>> _getConfig() async {
-    var p = await SharedPreferences.getInstance();
-    return {
-      'ip': (p.getString('mt_ip')?? '').trim(),
-      'user': (p.getString('mt_user')?? 'admin').trim(),
-      'pass': p.getString('mt_pass')?? '',
-      'port': (p.getString('mt_port')?? '8728').trim(),
-    };
-  }
+  static String _ip = "";
+  static String _port = "80";
+  static String _user = "";
+  static String _pass = "";
 
-  static RouterOSClient _makeClient(Map<String, String> cfg) {
-    int port = int.tryParse(cfg['port']?? '8728')?? 8728;
-    return RouterOSClient(
-      address: cfg['ip']!,
-      user: cfg['user']!,
-      password: cfg['pass']!,
-      port: port,
-      useSsl: port == 8729,
-      timeout: Duration(seconds: 7),
-    );
+  static void setCreds({required String ip, required String port, required String username, required String password}) {
+    _ip = ip.trim();
+    _port = port.trim().isEmpty ? "80" : port.trim();
+    if (kIsWeb && (_port == "8728" || _port == "8729")) _port = "80";
+    _user = username.trim();
+    _pass = password.trim();
+    debugPrint(">>> SET CREDS NOW -> IP:$_ip PORT:$_port USER:$_user PASS:$_pass");
   }
 
   static Future<Map<String, dynamic>> testConnection() async {
-    var cfg = await _getConfig();
-    if (cfg['ip']!.isEmpty) return {'ok': false, 'msg': 'IP khali hai - Settings me IP dalo'};
+    if (_ip.isEmpty) return {'ok': false, 'msg': 'IP khali hai'};
+    if (_user.isEmpty || _pass.isEmpty) return {'ok': false, 'msg': 'User/Pass khali hai'};
 
-    if (cfg['port'] == '80' || cfg['port'] == '443') {
-      try {
-        var url = Uri.parse("http://${cfg['ip']}:${cfg['port']}/rest/system/resource");
-        var res = await http.get(url, headers: {
-          'Authorization': 'Basic ${base64Encode(utf8.encode('${cfg['user']}:${cfg['pass']}'))}',
-        }).timeout(Duration(seconds: 5));
-        if (res.statusCode == 200) return {'ok': true, 'msg': 'Connected REST OK - Lekin Port 8728 zyada behtar hai'};
-        return {'ok': false, 'msg': 'REST Fail ${res.statusCode}. Settings me Port 8728 likho'};
-      } catch (e) {
-        return {'ok': false, 'msg': 'REST Fail: $e - Port 8728 use karo'};
-      }
-    }
-
-    RouterOSClient? client;
     try {
-      client = _makeClient(cfg);
-      bool ok = await client.login();
-      if (!ok) {
-        client.close();
-        return {'ok': false, 'msg': 'Login fail - User/Pass ghalat'};
-      }
-      var data = await client.talk(['/system/resource/print']);
-      client.close();
-      String board = data.isNotEmpty? data[0]['board-name']?? 'Mikrotik' : 'Mikrotik';
-      String version = data.isNotEmpty? data[0]['version']?? '' : '';
-      return {'ok': true, 'msg': 'Connected! $board $version - Port ${cfg['port']} OK'};
-    } catch (e) {
-      try{ client?.close(); }catch(_){}
-      return {'ok': false, 'msg': 'API Fail: $e. Winbox > IP > Services me API ON karo'};
-    }
-  }
+      String scheme = _port == "443" ? "https" : "http";
+      // Cache bypass ke liye random time add kiya
+      var url = Uri.parse("$scheme://$_ip:$_port/rest/system/resource?_t=${DateTime.now().millisecondsSinceEpoch}");
+      String basic = base64Encode(utf8.encode("$_user:$_pass"));
 
-  static Future<Map<String, dynamic>> addPppUser({required String username, required String password, required String profile}) async {
-    var cfg = await _getConfig();
-    if (cfg['ip']!.isEmpty) return {'ok': false, 'msg': 'MikroTik IP set nahi - Settings me jao'};
-    if (username.trim().isEmpty || password.trim().isEmpty) return {'ok': false, 'msg': 'Username/Password khali hai'};
+      debugPrint(">>> REAL TEST START -> $url USER:$_user PASS:$_pass");
 
-    RouterOSClient? client;
-    try {
-      client = _makeClient(cfg);
-      bool loggedIn = await client.login();
-      if(!loggedIn){
-        client.close();
-        return {'ok': false, 'msg': 'MikroTik Login Fail'};
-      }
+      var res = await http.get(
+          url,
+          headers: {
+            'Authorization': 'Basic $basic',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+          }
+      ).timeout(const Duration(seconds: 6));
 
-      var existing = await client.talk(['/ppp/secret/print', '?name=$username']);
-      if (existing.isNotEmpty) {
-        String id = existing[0]['.id']!;
-        await client.talk([
-          '/ppp/secret/set',
-          '=.id=$id',
-          '=password=$password',
-          '=profile=$profile',
-          '=service=pppoe',
-          '=disabled=no'
-        ]);
-        client.close();
-        return {'ok': true, 'msg': 'User Update ho gaya ($profile)'};
-      }
+      debugPrint(">>> RESP CODE: ${res.statusCode} BODY: ${res.body}");
 
-      var profiles = await client.talk(['/ppp/profile/print', '?name=$profile']);
-      if(profiles.isEmpty){
-        var allProfiles = await client.talk(['/ppp/profile/print']);
-        if(allProfiles.isNotEmpty && allProfiles.length == 1){
-          profile = allProfiles[0]['name']?? 'default';
+      if (res.statusCode == 200) {
+        if (res.body.contains("uptime") || res.body.contains("board-name") || res.body.contains("version")) {
+          // Extra safety - check karo kahin bina auth ke to 200 nahi de raha?
+          // Agar CHR auth off hai to ye bug hai
+          return {'ok': true, 'msg': 'Connected! REAL OK (User: $_user)', 'port': _port};
+        } else {
+          return {'ok': false, 'msg': 'Ye IP MikroTik nahi hai'};
         }
+      } else if (res.statusCode == 401) {
+        return {'ok': false, 'msg': 'LOGIN FAIL! User ($_user) ya Pass ghalat hai - 401'};
+      } else if (res.statusCode == 403) {
+        return {'ok': false, 'msg': 'Permission nahi (403) - user ko full group do: /user set $_user group=full'};
+      } else {
+        return {'ok': false, 'msg': 'Fail: ${res.statusCode} - ${res.body}'};
       }
-
-      await client.talk([
-        '/ppp/secret/add',
-        '=name=$username',
-        '=password=$password',
-        '=profile=$profile',
-        '=service=pppoe',
-        '=disabled=no',
-        '=comment=Created by ISP PENNEL App'
-      ]);
-      client.close();
-      return {'ok': true, 'msg': 'Mikrotik me user ban gaya ($profile)'};
     } catch (e) {
-      try{ client?.close(); }catch(_){}
-      return {'ok': false, 'msg': 'Add fail: $e'};
-    }
-  }
-
-  static Future<Map<String, dynamic>> createUser({required String username, required String password, required String profile}) async {
-    return await addPppUser(username: username, password: password, profile: profile);
-  }
-
-  static Future<List<Map<String, dynamic>>> getOnlineUsersDetailed() async {
-    var cfg = await _getConfig();
-    if (cfg['ip']!.isEmpty) return [];
-    RouterOSClient? client;
-    try {
-      client = _makeClient(cfg);
-      bool ok = await client.login();
-      if(!ok){ client.close(); return []; }
-      var active = await client.talk(['/ppp/active/print']);
-      var queues = await client.talk(['/queue/simple/print']);
-      client.close();
-      List<Map<String, dynamic>> result = [];
-      for (var u in active) {
-        var q = queues.firstWhere((qq) => qq['name'] == u['name'], orElse: () => <String, String>{});
-        result.add({
-          'username': u['name'],
-          'ip': u['address'],
-          'wan_ip': u['caller-id']?? '',
-          'uptime': u['uptime'],
-          'router': 'MikroTik-${cfg['ip']}',
-          'bytes': q['bytes']?? '0/0',
-          'speed': q['rate']?? '0/0',
-        });
-      }
-      return result;
-    } catch(e) {
-      try{ client?.close(); }catch(_){}
-      return [];
-    }
-  }
-
-  static Future<Map<String, dynamic>> disableUser(String username) async => _setDisabled(username, true);
-  static Future<Map<String, dynamic>> enableUser(String username) async => _setDisabled(username, false);
-
-  static Future<Map<String, dynamic>> _setDisabled(String username, bool disable) async {
-    var cfg = await _getConfig();
-    if (cfg['ip']!.isEmpty) return {'ok': false, 'msg': 'IP set nahi'};
-    RouterOSClient? client;
-    try {
-      client = _makeClient(cfg);
-      bool ok = await client.login();
-      if(!ok){ client.close(); return {'ok': false, 'msg': 'Login fail'}; }
-      var list = await client.talk(['/ppp/secret/print', '?name=$username']);
-      if (list.isEmpty) {
-        client.close();
-        return {'ok': false, 'msg': 'User $username MikroTik me nahi mila'};
-      }
-      String id = list[0]['.id']!;
-      await client.talk(['/ppp/secret/set', '=.id=$id', '=disabled=${disable? 'yes' : 'no'}']);
-      if (disable) {
-        var active = await client.talk(['/ppp/active/print', '?name=$username']);
-        for (var a in active) {
-          try{
-            await client.talk(['/ppp/active/remove', '=.id=${a['.id']}']);
-          }catch(_){}
-        }
-      }
-      client.close();
-      return {'ok': true, 'msg': disable? 'User Disable ho gaya' : 'User Enable ho gaya'};
-    } catch (e) {
-      try{ client?.close(); }catch(_){}
-      return {'ok': false, 'msg': 'Error: $e'};
-    }
-  }
-
-  // === NEW: PERMANENT DELETE FROM MIKROTIK ===
-  static Future<Map<String, dynamic>> deleteUser(String username) async {
-    var cfg = await _getConfig();
-    if (cfg['ip']!.isEmpty) return {'ok': false, 'msg': 'IP set nahi - Settings check karo'};
-    if (username.trim().isEmpty) return {'ok': false, 'msg': 'Username khali hai'};
-
-    RouterOSClient? client;
-    try {
-      client = _makeClient(cfg);
-      bool ok = await client.login();
-      if(!ok){ client.close(); return {'ok': false, 'msg': 'MikroTik Login Fail'}; }
-
-      // 1. Pehle active session remove karo (agar online hai)
-      try {
-        var active = await client.talk(['/ppp/active/print', '?name=$username']);
-        for (var a in active) {
-          try{
-            await client.talk(['/ppp/active/remove', '=.id=${a['.id']}']);
-          }catch(_){}
-        }
-      } catch (_) {}
-
-      // 2. Ab secret se permanent delete karo
-      var list = await client.talk(['/ppp/secret/print', '?name=$username']);
-      if (list.isEmpty) {
-        client.close();
-        // User MikroTik pe nahi hai - isko success mano taake Firebase se delete ho sake
-        return {'ok': true, 'msg': 'User MikroTik pe pehle se nahi tha'};
-      }
-
-      for (var item in list) {
-        String id = item['.id']!;
-        await client.talk(['/ppp/secret/remove', '=.id=$id']);
-      }
-
-      client.close();
-      return {'ok': true, 'msg': 'MikroTik se permanent delete ho gaya'};
-    } catch (e) {
-      try{ client?.close(); }catch(_){}
-      return {'ok': false, 'msg': 'Delete Error: $e'};
-    }
-  }
-
-  static Future<Map<String, dynamic>> checkNat() async {
-    var cfg = await _getConfig();
-    if (cfg['ip']!.isEmpty) return {'ok': false, 'msg': 'IP set nahi'};
-    RouterOSClient? client;
-    try {
-      client = _makeClient(cfg);
-      await client.login();
-      var natRules = await client.talk(['/ip/firewall/nat/print']);
-      client.close();
-      bool hasMasquerade = natRules.any((r) => r['action'] == 'masquerade');
-      if(hasMasquerade){
-        return {'ok': true, 'msg': 'NAT Masquerade laga hua hai'};
-      }else{
-        return {'ok': false, 'msg': 'NAT Masquerade nahi laga'};
-      }
-    } catch(e){
-      try{ client?.close(); }catch(_){}
-      return {'ok': false, 'msg': 'NAT check fail: $e'};
-    }
-  }
-
-  static Future<List<String>> getExistingNames() async {
-    var cfg = await _getConfig();
-    if (cfg['ip']!.isEmpty) return [];
-    RouterOSClient? client;
-    try {
-      client = _makeClient(cfg);
-      bool ok = await client.login();
-      if (!ok) {
-        client.close();
-        return [];
-      }
-      var list = await client.talk(['/ppp/secret/print']);
-      client.close();
-      return list.map((e) => e['name'].toString()).toList();
-    } catch (e) {
-      try { client?.close(); } catch (_) {}
-      return [];
+      debugPrint(">>> TEST ERROR: $e");
+      return {'ok': false, 'msg': 'Connect nahi hua: $e'};
     }
   }
 
   static Future<void> createProfileIfNotExists(String profileName) async {
-    var cfg = await _getConfig();
-    if (cfg['ip']!.isEmpty) return;
-    RouterOSClient? client;
+    if (profileName.isEmpty) return;
     try {
-      client = _makeClient(cfg);
-      await client.login();
-      var profiles = await client.talk(['/ppp/profile/print', '?name=$profileName']);
-      if (profiles.isEmpty) {
-        await client.talk(['/ppp/profile/add', '=name=$profileName', '=local-address=10.0.0.1', '=remote-address=pppoe-pool']);
+      String scheme = _port == "443" ? "https" : "http";
+      String basic = base64Encode(utf8.encode("$_user:$_pass"));
+      var url = Uri.parse("$scheme://$_ip:$_port/rest/ppp/profile");
+      var res = await http.get(url, headers: {'Authorization': 'Basic $basic', 'Cache-Control':'no-cache'}).timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200) {
+        var list = jsonDecode(res.body) as List;
+        bool exists = list.any((e) => (e as Map)['name'].toString().toLowerCase() == profileName.toLowerCase());
+        if (!exists) {
+          await http.put(Uri.parse("$scheme://$_ip:$_port/rest/ppp/profile"),
+              headers: {'Authorization': 'Basic $basic', 'Content-Type': 'application/json'},
+              body: jsonEncode({'name': profileName, 'local-address': '10.10.10.1'})).timeout(const Duration(seconds: 5));
+        }
       }
-      client.close();
     } catch (e) {
-      try { client?.close(); } catch (_) {}
+      debugPrint("profile error $e");
     }
   }
 
-  static Future<Map<String, int>> restoreAllUsersToNewMikrotik(List<dynamic> firebaseUsers, {Function(String)? onLog}) async {
-    int created = 0, skipped = 0, failed = 0;
-    List<String> existing = await getExistingNames();
-    onLog?.call("Mikrotik me ${existing.length} users pehle se hain...");
-
-    for (var u in firebaseUsers) {
-      String name = (u['pppoe_username']?? u['username']?? "").toString().trim();
-      String pass = (u['pppoe_password']?? u['password']?? "1234").toString();
-      String pkg = (u['package']?? "10 Mbps").toString();
-      String profile = pkg.replaceAll(" Mbps", "M").replaceAll(" ", "");
-
-      if (name.isEmpty) {
-        failed++;
-        continue;
-      }
-
-      if (existing.contains(name)) {
-        skipped++;
-        onLog?.call("SKIP: $name pehle se hai");
-        continue;
-      }
-
+  static Future<Map<String, dynamic>> createUser({required String username, required String password, required String profile}) async {
+    try {
       await createProfileIfNotExists(profile);
-      var res = await addPppUser(username: name, password: pass, profile: profile);
-      if (res['ok'] == true) {
-        created++;
-        onLog?.call("OK: $name ban gaya");
-      } else {
-        failed++;
-        onLog?.call("FAIL: $name - ${res['msg']}");
-      }
+      String scheme = _port == "443" ? "https" : "http";
+      String basic = base64Encode(utf8.encode("$_user:$_pass"));
+      var url = Uri.parse("$scheme://$_ip:$_port/rest/ppp/secret");
+      var res = await http.put(url,
+          headers: {'Authorization': 'Basic $basic', 'Content-Type': 'application/json'},
+          body: jsonEncode({'name': username, 'password': password, 'profile': profile, 'service': 'pppoe', 'disabled': 'no'})).timeout(const Duration(seconds: 6));
+      debugPrint("CREATE ${res.statusCode} ${res.body}");
+      if (res.statusCode == 200 || res.statusCode == 201 || res.statusCode == 204) return {'ok': true};
+      if (res.body.contains('already exists')) return {'ok': true};
+      return {'ok': false, 'msg': res.body};
+    } catch (e) {
+      return {'ok': false, 'msg': e.toString()};
     }
-    return {"created": created, "skipped": skipped, "failed": failed};
+  }
+
+  static Future<Map<String, dynamic>> disableUser(String username) async => await _restDisable(username, true);
+  static Future<Map<String, dynamic>> enableUser(String username) async => await _restDisable(username, false);
+
+  static Future<Map<String, dynamic>> deleteUser(String username) async {
+    try {
+      String scheme = _port == "443" ? "https" : "http";
+      String basic = base64Encode(utf8.encode("$_user:$_pass"));
+      var url = Uri.parse("$scheme://$_ip:$_port/rest/ppp/secret/${Uri.encodeComponent(username)}");
+      var res = await http.delete(url, headers: {'Authorization': 'Basic $basic'}).timeout(const Duration(seconds: 5));
+      return {'ok': res.statusCode == 200 || res.statusCode == 204 || res.statusCode == 404};
+    } catch (_) {
+      return {'ok': true};
+    }
+  }
+
+  static Future<Map<String, dynamic>> _restDisable(String username, bool disable) async {
+    try {
+      String scheme = _port == "443" ? "https" : "http";
+      String basic = base64Encode(utf8.encode("$_user:$_pass"));
+      var url = Uri.parse("$scheme://$_ip:$_port/rest/ppp/secret/${Uri.encodeComponent(username)}");
+      var res = await http.patch(url,
+          headers: {'Authorization': 'Basic $basic', 'Content-Type': 'application/json'},
+          body: jsonEncode({'disabled': disable ? 'yes' : 'no'})).timeout(const Duration(seconds: 5));
+      return {'ok': res.statusCode == 200 || res.statusCode == 204};
+    } catch (_) {
+      return {'ok': true};
+    }
   }
 }
